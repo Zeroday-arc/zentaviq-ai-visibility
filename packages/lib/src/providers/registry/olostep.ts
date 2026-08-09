@@ -133,6 +133,9 @@ export const olostep: Provider = {
 		if (!OLOSTEP_PARSERS[config.model]) {
 			return `Olostep does not support model "${config.model}". Supported: ${Object.keys(OLOSTEP_PARSERS).join(", ")}`;
 		}
+		if (!config.webSearch) {
+			return `${config.model}:olostep requires :online — these chatbots always use web search`;
+		}
 		return null;
 	},
 

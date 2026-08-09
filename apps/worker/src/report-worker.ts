@@ -237,6 +237,7 @@ async function runPrompt(
 				model: config.model,
 				version: result.modelVersion ?? config.version ?? config.provider,
 				webSearchEnabled: config.webSearch,
+				rawOutput: result.rawOutput,
 				webQueries: result.webQueries,
 				textContent: result.textContent,
 				brandMentioned,

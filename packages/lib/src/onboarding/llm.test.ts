@@ -33,7 +33,7 @@ afterEach(() => {
 describe("resolveResearchProvider", () => {
 	it("uses the explicit env override when set", () => {
 		process.env.ANTHROPIC_API_KEY = "x";
-		const provider = resolveResearchProvider({
+		const { provider } = resolveResearchProvider({
 			ANTHROPIC_API_KEY: "x",
 			ONBOARDING_LLM_TARGET: "claude:anthropic-api",
 		});
@@ -66,7 +66,7 @@ describe("resolveResearchProvider", () => {
 		process.env.OPENROUTER_API_KEY = "b";
 		process.env.ANTHROPIC_API_KEY = "c";
 		process.env.MISTRAL_API_KEY = "d";
-		const provider = resolveResearchProvider();
+		const { provider } = resolveResearchProvider();
 		expect(provider.id).toBe("openai-api");
 	});
 
@@ -74,20 +74,20 @@ describe("resolveResearchProvider", () => {
 		process.env.OPENROUTER_API_KEY = "b";
 		process.env.ANTHROPIC_API_KEY = "c";
 		process.env.MISTRAL_API_KEY = "d";
-		const provider = resolveResearchProvider();
+		const { provider } = resolveResearchProvider();
 		expect(provider.id).toBe("openrouter");
 	});
 
 	it("falls back to Anthropic when OpenAI / OpenRouter aren't configured", () => {
 		process.env.ANTHROPIC_API_KEY = "c";
 		process.env.MISTRAL_API_KEY = "d";
-		const provider = resolveResearchProvider();
+		const { provider } = resolveResearchProvider();
 		expect(provider.id).toBe("anthropic-api");
 	});
 
 	it("falls back to Mistral when only Mistral is set", () => {
 		process.env.MISTRAL_API_KEY = "x";
-		const provider = resolveResearchProvider();
+		const { provider } = resolveResearchProvider();
 		expect(provider.id).toBe("mistral-api");
 	});
 

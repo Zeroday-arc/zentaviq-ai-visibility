@@ -4,7 +4,9 @@
 
 ### Project overview
 
-Elmo is an open-source AI visibility tracking platform (Answer Engine Optimization). It is a **pnpm monorepo** using **Turborepo**, **Node.js 24**, and **PostgreSQL 16**.
+Zentaviq AI Visibility is a private AI-visibility product (Answer Engine Optimization) maintained in `Zeroday-arc/zentaviq-ai-visibility`. This repository is derived from GetCito v9 at commit `8dc92cf2a3a5da8392e6e13d646f20c61b36b671` and has substantial structural ancestry and shared implementation with Elmo. Treat upstream-originated material as third-party code, preserve its notices, and see `THIRD_PARTY_NOTICES.md` for provenance and licensing details.
+
+It is a **pnpm monorepo** using **Turborepo**, **Node.js 24**, and **PostgreSQL 16**.
 
 Key apps: `apps/web` (TanStack Start dashboard, port 3000), `apps/worker` (pg-boss background jobs), `apps/cli` (deployment CLI).
 

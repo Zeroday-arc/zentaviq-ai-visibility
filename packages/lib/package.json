@@ -21,6 +21,7 @@
     "./languages": "./src/languages.ts",
     "./location-languages": "./src/location-languages.ts",
     "./text-extraction": "./src/text-extraction.ts",
+    "./evidence": "./src/evidence.ts",
     "./dataforseo": "./src/dataforseo.ts",
     "./onboarding": "./src/onboarding/index.ts",
     "./tag-utils": "./src/tag-utils.ts",

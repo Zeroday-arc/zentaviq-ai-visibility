@@ -1,5 +1,6 @@
 import {
 	auditRuns,
+	citationClaimEvidenceLinks,
 	citationEvidenceRecords,
 	entityIdentityEvidenceRecords,
 	frozenPromptVariants,
@@ -39,11 +40,14 @@ export class DrizzleImmutableEvidenceStore implements ImmutableEvidenceStore {
 			if (bundle.responsePayloads.length > 0) {
 				await tx.insert(providerResponsePayloads).values(bundle.responsePayloads).onConflictDoNothing();
 			}
+			if (bundle.entityEvidence.length > 0) {
+				await tx.insert(entityIdentityEvidenceRecords).values(bundle.entityEvidence).onConflictDoNothing();
+			}
 			if (bundle.citationEvidence.length > 0) {
 				await tx.insert(citationEvidenceRecords).values(bundle.citationEvidence).onConflictDoNothing();
 			}
-			if (bundle.entityEvidence.length > 0) {
-				await tx.insert(entityIdentityEvidenceRecords).values(bundle.entityEvidence).onConflictDoNothing();
+			if (bundle.citationClaimLinks.length > 0) {
+				await tx.insert(citationClaimEvidenceLinks).values(bundle.citationClaimLinks).onConflictDoNothing();
 			}
 		});
 	}
@@ -62,6 +66,7 @@ export class InMemoryImmutableEvidenceStore implements ImmutableEvidenceStore {
 		responsePayloads: new Map<string, ReplayAuditBundle["responsePayloads"][number]>(),
 		citationEvidence: new Map<string, ReplayAuditBundle["citationEvidence"][number]>(),
 		entityEvidence: new Map<string, ReplayAuditBundle["entityEvidence"][number]>(),
+		citationClaimLinks: new Map<string, ReplayAuditBundle["citationClaimLinks"][number]>(),
 	};
 
 	async persist(bundle: ReplayAuditBundle): Promise<void> {
@@ -74,6 +79,7 @@ export class InMemoryImmutableEvidenceStore implements ImmutableEvidenceStore {
 			responsePayloads: bundle.responsePayloads,
 			citationEvidence: bundle.citationEvidence,
 			entityEvidence: bundle.entityEvidence,
+			citationClaimLinks: bundle.citationClaimLinks,
 		};
 
 		for (const [collectionName, records] of Object.entries(incoming)) {
@@ -113,6 +119,7 @@ export class InMemoryImmutableEvidenceStore implements ImmutableEvidenceStore {
 			responsePayloads: values(this.collections.responsePayloads),
 			citationEvidence: values(this.collections.citationEvidence),
 			entityEvidence: values(this.collections.entityEvidence),
+			citationClaimLinks: values(this.collections.citationClaimLinks),
 		};
 	}
 }

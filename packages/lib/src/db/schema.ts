@@ -11,6 +11,7 @@ import {
 	uniqueIndex,
 	integer,
 	smallint,
+	real,
 } from "drizzle-orm/pg-core";
 
 // Better-auth tables & relations — re-exported so `import * as schema` sees everything.
@@ -31,7 +32,20 @@ export const citationEvidenceTypeEnum = pgEnum("citation_evidence_type", [
 	"competitor",
 	"unknown",
 ]);
-export const evidenceEntityRoleEnum = pgEnum("evidence_entity_role", ["brand", "competitor"]);
+export const evidenceEntityRoleEnum = pgEnum("evidence_entity_role", ["brand", "competitor", "unknown"]);
+export const evidenceDecisionStatusEnum = pgEnum("evidence_decision_status", [
+	"accepted",
+	"rejected",
+	"ambiguous",
+	"not_detected",
+]);
+export const evidenceReviewStateEnum = pgEnum("evidence_review_state", [
+	"not_required",
+	"pending",
+	"accepted",
+	"rejected",
+]);
+export const citationClaimTypeEnum = pgEnum("citation_claim_type", ["identity", "mention", "recommendation"]);
 
 export const brands = pgTable("brands", {
 	id: text("id").primaryKey().notNull(),
@@ -375,11 +389,14 @@ export const entityIdentityEvidenceRecords = pgTable(
 		mentioned: boolean("mentioned").notNull(),
 		recommended: boolean("recommended").notNull(),
 		cited: boolean("cited").notNull(),
+		prominenceRank: integer("prominence_rank"),
+		reviewState: evidenceReviewStateEnum("review_state").default("not_required").notNull(),
 		extractorId: text("extractor_id").notNull(),
 		extractorVersion: text("extractor_version").notNull(),
 		identitySnapshot: jsonb("identity_snapshot").$type<unknown>().notNull(),
 		matchEvidence: jsonb("match_evidence").$type<unknown>().notNull(),
 		recommendationEvidence: jsonb("recommendation_evidence").$type<unknown>().notNull(),
+		classificationEvidence: jsonb("classification_evidence").$type<unknown>().default({}).notNull(),
 		extractedAt: timestamp("extracted_at", { withTimezone: true }).notNull(),
 	},
 	(table) => ({
@@ -389,6 +406,42 @@ export const entityIdentityEvidenceRecords = pgTable(
 		),
 		correlationUnique: uniqueIndex("entity_identity_evidence_correlation_unique").on(table.correlationId),
 		providerIdx: index("entity_identity_evidence_provider_run_idx").on(table.providerRunId),
+	}),
+).enableRLS();
+
+/** Immutable, evidence-backed relationship between one citation and one entity claim. */
+export const citationClaimEvidenceLinks = pgTable(
+	"citation_claim_evidence_links",
+	{
+		id: uuid("id").primaryKey().notNull(),
+		citationEvidenceId: uuid("citation_evidence_id")
+			.references(() => citationEvidenceRecords.id, { onDelete: "cascade" })
+			.notNull(),
+		entityEvidenceId: uuid("entity_evidence_id")
+			.references(() => entityIdentityEvidenceRecords.id, { onDelete: "cascade" })
+			.notNull(),
+		schemaVersion: integer("schema_version").notNull(),
+		correlationId: text("correlation_id").notNull(),
+		claim: citationClaimTypeEnum("claim").notNull(),
+		status: evidenceDecisionStatusEnum("status").notNull(),
+		classifierId: text("classifier_id").notNull(),
+		classifierVersion: text("classifier_version").notNull(),
+		sourceExcerpt: text("source_excerpt").notNull(),
+		excerptStart: integer("excerpt_start").notNull(),
+		excerptEnd: integer("excerpt_end").notNull(),
+		confidence: real("confidence").notNull(),
+		reasonCodes: text("reason_codes").array().notNull(),
+		sourceEvidenceIds: uuid("source_evidence_ids").array().notNull(),
+		createdAt: timestamp("created_at", { withTimezone: true }).notNull(),
+	},
+	(table) => ({
+		citationEntityClaimUnique: uniqueIndex("citation_claim_evidence_link_unique").on(
+			table.citationEvidenceId,
+			table.entityEvidenceId,
+			table.claim,
+		),
+		correlationUnique: uniqueIndex("citation_claim_evidence_correlation_unique").on(table.correlationId),
+		entityIdx: index("citation_claim_evidence_entity_idx").on(table.entityEvidenceId),
 	}),
 ).enableRLS();
 
@@ -473,6 +526,8 @@ export type CitationEvidenceRecord = typeof citationEvidenceRecords.$inferSelect
 export type NewCitationEvidenceRecord = typeof citationEvidenceRecords.$inferInsert;
 export type EntityIdentityEvidenceRecord = typeof entityIdentityEvidenceRecords.$inferSelect;
 export type NewEntityIdentityEvidenceRecord = typeof entityIdentityEvidenceRecords.$inferInsert;
+export type CitationClaimEvidenceLink = typeof citationClaimEvidenceLinks.$inferSelect;
+export type NewCitationClaimEvidenceLink = typeof citationClaimEvidenceLinks.$inferInsert;
 
 export type Report = typeof reports.$inferSelect;
 export type NewReport = typeof reports.$inferInsert;

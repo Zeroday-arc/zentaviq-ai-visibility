@@ -3,24 +3,35 @@ import { z } from "zod";
 import {
 	classifyEntities,
 	createUnverifiedCitationEvidence,
+	ENTITY_CLASSIFIER_ID,
+	ENTITY_CLASSIFIER_VERSION,
 	normalizeHttpUrl,
 	type CitationEvidenceV1,
 	type EntityClassification,
 	type EntityIdentityInput,
 } from "./evidence";
 
-export const AUDIT_RECORD_SCHEMA_VERSION = 1 as const;
-export const REPLAY_FIXTURE_SCHEMA_VERSION = 1 as const;
+export const AUDIT_RECORD_SCHEMA_VERSION = 2 as const;
+export const REPLAY_FIXTURE_SCHEMA_VERSION = 2 as const;
 export const REPLAY_EXTRACTOR_ID = "zentaviq-fixture-replay-extractor";
-export const REPLAY_EXTRACTOR_VERSION = "1.0.0";
+export const REPLAY_EXTRACTOR_VERSION = "2.0.0";
+export const EVIDENCE_CLASSIFIER_ID = "zentaviq-deterministic-evidence-classifier";
+export const EVIDENCE_CLASSIFIER_VERSION = "2.0.0";
 export const REPLAY_PROVIDER_ID = "fixture-replay";
 export const REPLAY_MODEL_ID = "zentaviq-replay";
-export const REPLAY_MODEL_VERSION = "v0.1-fixtures";
+export const REPLAY_MODEL_VERSION = "v0.1-evidence-classification";
+export const HUMAN_REVIEW_CONFIDENCE_THRESHOLD = 0.75;
 
 export type AuditRunKind = "baseline" | "audit";
 export type AuditExecutionMode = "fixture_replay" | "live";
 export type RetrievalStatus = "retrieved" | "not_retrieved";
 export type CitationType = "first_party" | "independent" | "competitor" | "unknown";
+export type EvidenceEntityRole = "brand" | "competitor" | "unknown";
+export type EvidenceEntityType = "target_business" | "competitor" | "unrelated_unknown";
+export type EvidenceDecisionStatus = "accepted" | "rejected" | "ambiguous" | "not_detected";
+export type EvidenceReviewState = "not_required" | "pending" | "accepted" | "rejected";
+export type CitationClaimType = "identity" | "mention" | "recommendation";
+export type EvidenceSourceKind = "retrieval" | "identity_match" | "recommendation_cue" | "prominence" | "citation";
 
 const fixtureCitationSchema = z
 	.object({
@@ -71,6 +82,12 @@ export const replayFixtureSchema = z
 				model: z.literal(REPLAY_MODEL_ID),
 				version: z.literal(REPLAY_MODEL_VERSION),
 				metadata: z.record(z.string(), z.string()),
+			})
+			.strict(),
+		classificationContext: z
+			.object({
+				sharedAlias: z.string().min(1).optional(),
+				categoryTerms: z.array(z.string().min(1)),
 			})
 			.strict(),
 		payload: replayProviderPayloadSchema,
@@ -177,13 +194,65 @@ export interface ProviderResponsePayloadRecord {
 }
 
 export interface RecommendationEvidence {
-	status: "accepted" | "not_detected";
+	status: EvidenceDecisionStatus;
 	rule: string;
+	confidence: number;
+	reasonCodes: string[];
 	cue?: string;
 	cueStart?: number;
 	cueEnd?: number;
 	entityMatchStart?: number;
 	entityMatchEnd?: number;
+}
+
+export interface ClassificationSourceEvidence {
+	id: string;
+	kind: EvidenceSourceKind;
+	disposition: Exclude<EvidenceDecisionStatus, "not_detected">;
+	matchedIdentityTerm: string | null;
+	matchedDomain: string | null;
+	matchedAlias: string | null;
+	matchRule: string;
+	classifierId: string;
+	classifierVersion: string;
+	excerpt: string;
+	start: number;
+	end: number;
+	confidence: number;
+	reasonCodes: string[];
+	sourceEvidenceIds: string[];
+}
+
+export interface ClassificationDecision {
+	status: EvidenceDecisionStatus;
+	value: boolean | number | string | null;
+	rule: string;
+	confidence: number;
+	reasonCodes: string[];
+	sourceEvidenceIds: string[];
+}
+
+export interface EntityClassificationTrace {
+	schemaVersion: number;
+	classifier: {
+		id: string;
+		version: string;
+		deterministic: true;
+	};
+	entityType: EvidenceEntityType;
+	review: {
+		state: EvidenceReviewState;
+		reasonCodes: string[];
+	};
+	decisions: {
+		retrieved: ClassificationDecision;
+		mentioned: ClassificationDecision;
+		recommended: ClassificationDecision;
+		prominence: ClassificationDecision;
+		cited: ClassificationDecision;
+		entityType: ClassificationDecision;
+	};
+	sources: ClassificationSourceEvidence[];
 }
 
 export interface CitationEvidenceRecord {
@@ -211,18 +280,40 @@ export interface EntityIdentityEvidenceRecord {
 	schemaVersion: number;
 	correlationId: string;
 	entityId: string;
-	entityRole: "brand" | "competitor";
+	entityRole: EvidenceEntityRole;
 	identityVersion: number;
 	retrieved: boolean;
 	mentioned: boolean;
 	recommended: boolean;
 	cited: boolean;
+	prominenceRank: number | null;
+	reviewState: EvidenceReviewState;
 	extractorId: string;
 	extractorVersion: string;
 	identitySnapshot: EntityIdentityInput;
 	matchEvidence: EntityClassification;
 	recommendationEvidence: RecommendationEvidence;
+	classificationEvidence: EntityClassificationTrace;
 	extractedAt: Date;
+}
+
+export interface CitationClaimEvidenceLinkRecord {
+	id: string;
+	citationEvidenceId: string;
+	entityEvidenceId: string;
+	schemaVersion: number;
+	correlationId: string;
+	claim: CitationClaimType;
+	status: EvidenceDecisionStatus;
+	classifierId: string;
+	classifierVersion: string;
+	sourceExcerpt: string;
+	excerptStart: number;
+	excerptEnd: number;
+	confidence: number;
+	reasonCodes: string[];
+	sourceEvidenceIds: string[];
+	createdAt: Date;
 }
 
 export interface ReplayAuditBundle {
@@ -234,6 +325,7 @@ export interface ReplayAuditBundle {
 	responsePayloads: ProviderResponsePayloadRecord[];
 	citationEvidence: CitationEvidenceRecord[];
 	entityEvidence: EntityIdentityEvidenceRecord[];
+	citationClaimLinks: CitationClaimEvidenceLinkRecord[];
 }
 
 export interface ReplayAuditSummary {
@@ -243,10 +335,12 @@ export interface ReplayAuditSummary {
 	providerRunCount: number;
 	entityEvidenceCount: number;
 	citationEvidenceCount: number;
+	citationClaimLinkCount: number;
 	retrievedRuns: number;
 	mentionedEntities: number;
 	recommendedEntities: number;
 	citedEntities: number;
+	pendingReviewEntities: number;
 	citationTypes: Record<CitationType, number>;
 	completedAt: string;
 }
@@ -335,9 +429,10 @@ export function createReplayFixtures(input: Pick<ReplayAuditInput, "brand" | "co
 	const competitorDomain = canonicalDomain(competitor.domains?.[0] ?? "") ?? "ledgerlabs.example";
 	const provider = providerMetadata();
 
+	const baseContext = { categoryTerms: ["AI visibility platform", "AI visibility platforms"] };
 	const fixtures: ReplayFixture[] = [
 		{
-			fixtureId: "strong-business-first-party-v1",
+			fixtureId: "strong-business-first-party-v2",
 			fixtureVersion: REPLAY_FIXTURE_SCHEMA_VERSION,
 			capturedAt: "2026-08-01T00:00:00.000Z",
 			intent: {
@@ -351,6 +446,7 @@ export function createReplayFixtures(input: Pick<ReplayAuditInput, "brand" | "co
 				text: "Which AI visibility platform is a strong fit for an evidence-led marketing team?",
 			},
 			provider,
+			classificationContext: baseContext,
 			payload: {
 				schemaVersion: REPLAY_FIXTURE_SCHEMA_VERSION,
 				retrieved: true,
@@ -364,7 +460,7 @@ export function createReplayFixtures(input: Pick<ReplayAuditInput, "brand" | "co
 			},
 		},
 		{
-			fixtureId: "competitor-recommendation-citation-v1",
+			fixtureId: "competitor-recommendation-citation-v2",
 			fixtureVersion: REPLAY_FIXTURE_SCHEMA_VERSION,
 			capturedAt: "2026-08-01T00:01:00.000Z",
 			intent: {
@@ -378,6 +474,7 @@ export function createReplayFixtures(input: Pick<ReplayAuditInput, "brand" | "co
 				text: "Which competing AI visibility product is recommended for workflow depth?",
 			},
 			provider,
+			classificationContext: baseContext,
 			payload: {
 				schemaVersion: REPLAY_FIXTURE_SCHEMA_VERSION,
 				retrieved: true,
@@ -391,7 +488,7 @@ export function createReplayFixtures(input: Pick<ReplayAuditInput, "brand" | "co
 			},
 		},
 		{
-			fixtureId: "broad-category-ambiguity-v1",
+			fixtureId: "broad-category-ambiguity-v2",
 			fixtureVersion: REPLAY_FIXTURE_SCHEMA_VERSION,
 			capturedAt: "2026-08-01T00:02:00.000Z",
 			intent: {
@@ -405,11 +502,12 @@ export function createReplayFixtures(input: Pick<ReplayAuditInput, "brand" | "co
 				text: "What should teams consider when evaluating broad AI visibility categories?",
 			},
 			provider,
+			classificationContext: baseContext,
 			payload: {
 				schemaVersion: REPLAY_FIXTURE_SCHEMA_VERSION,
 				retrieved: true,
 				responseText:
-					"The category is broad: teams should compare evidence quality, model coverage, and repeatability before selecting a product.",
+					"The category is broad: teams should compare evidence quality, model coverage, and repeatability before selecting a product. Source: https://industry.example/ai-visibility-landscape.",
 				citations: [
 					{
 						url: "https://industry.example/ai-visibility-landscape",
@@ -419,7 +517,7 @@ export function createReplayFixtures(input: Pick<ReplayAuditInput, "brand" | "co
 			},
 		},
 		{
-			fixtureId: "no-retrieval-no-mention-v1",
+			fixtureId: "no-retrieval-no-mention-v2",
 			fixtureVersion: REPLAY_FIXTURE_SCHEMA_VERSION,
 			capturedAt: "2026-08-01T00:03:00.000Z",
 			intent: {
@@ -433,6 +531,7 @@ export function createReplayFixtures(input: Pick<ReplayAuditInput, "brand" | "co
 				text: "Return an answer only if sufficient evidence is available.",
 			},
 			provider,
+			classificationContext: baseContext,
 			payload: {
 				schemaVersion: REPLAY_FIXTURE_SCHEMA_VERSION,
 				retrieved: false,
@@ -440,33 +539,227 @@ export function createReplayFixtures(input: Pick<ReplayAuditInput, "brand" | "co
 				citations: [],
 			},
 		},
+		{
+			fixtureId: "mention-without-recommendation-v2",
+			fixtureVersion: REPLAY_FIXTURE_SCHEMA_VERSION,
+			capturedAt: "2026-08-01T00:04:00.000Z",
+			intent: {
+				key: "mention-without-recommendation",
+				version: 1,
+				name: "Mention without recommendation",
+				description: "A target identity mention without any recommendation cue.",
+			},
+			prompt: { version: 1, text: "Which products appear in the AI visibility market overview?" },
+			provider,
+			classificationContext: baseContext,
+			payload: {
+				schemaVersion: REPLAY_FIXTURE_SCHEMA_VERSION,
+				retrieved: true,
+				responseText: `${input.brand.name} appears in the market overview alongside several established tools.`,
+				citations: [],
+			},
+		},
+		{
+			fixtureId: "recommendation-low-prominence-v2",
+			fixtureVersion: REPLAY_FIXTURE_SCHEMA_VERSION,
+			capturedAt: "2026-08-01T00:05:00.000Z",
+			intent: {
+				key: "recommendation-low-prominence",
+				version: 1,
+				name: "Recommendation with low prominence",
+				description: "A positive target recommendation at explicit rank three.",
+			},
+			prompt: { version: 1, text: "Rank three AI visibility products for a small evidence team." },
+			provider,
+			classificationContext: baseContext,
+			payload: {
+				schemaVersion: REPLAY_FIXTURE_SCHEMA_VERSION,
+				retrieved: true,
+				responseText: `1. MarketScope\n2. Signal Atlas\n3. I recommend ${input.brand.name} for teams that prioritize evidence.`,
+				citations: [],
+			},
+		},
+		{
+			fixtureId: "competitor-ranked-above-target-v2",
+			fixtureVersion: REPLAY_FIXTURE_SCHEMA_VERSION,
+			capturedAt: "2026-08-01T00:06:00.000Z",
+			intent: {
+				key: "competitor-ranked-above-target",
+				version: 1,
+				name: "Competitor above target",
+				description: "An explicit ranking where the competitor precedes the target.",
+			},
+			prompt: { version: 1, text: "Rank the strongest workflow options." },
+			provider,
+			classificationContext: baseContext,
+			payload: {
+				schemaVersion: REPLAY_FIXTURE_SCHEMA_VERSION,
+				retrieved: true,
+				responseText: `1. I recommend ${competitor.name} for workflow depth.\n2. ${input.brand.name} is another credible option.`,
+				citations: [],
+			},
+		},
+		{
+			fixtureId: "alias-name-collision-v2",
+			fixtureVersion: REPLAY_FIXTURE_SCHEMA_VERSION,
+			capturedAt: "2026-08-01T00:07:00.000Z",
+			intent: {
+				key: "alias-name-collision",
+				version: 1,
+				name: "Alias and name collision",
+				description: "A shared alias that cannot be assigned to either tracked identity automatically.",
+			},
+			prompt: { version: 1, text: "Is Visibility Core recommended?" },
+			provider,
+			classificationContext: { ...baseContext, sharedAlias: "Visibility Core" },
+			payload: {
+				schemaVersion: REPLAY_FIXTURE_SCHEMA_VERSION,
+				retrieved: true,
+				responseText: "I recommend Visibility Core for teams that need detailed workflow controls.",
+				citations: [],
+			},
+		},
+		{
+			fixtureId: "target-domain-citation-without-recommendation-v2",
+			fixtureVersion: REPLAY_FIXTURE_SCHEMA_VERSION,
+			capturedAt: "2026-08-01T00:08:00.000Z",
+			intent: {
+				key: "target-domain-citation-without-recommendation",
+				version: 1,
+				name: "Target citation without recommendation",
+				description: "A target-owned domain is cited without a target name or recommendation.",
+			},
+			prompt: { version: 1, text: "Provide source material about evidence-led audits." },
+			provider,
+			classificationContext: baseContext,
+			payload: {
+				schemaVersion: REPLAY_FIXTURE_SCHEMA_VERSION,
+				retrieved: true,
+				responseText: `Reference material is available at https://${brandDomain}/research.`,
+				citations: [{ url: `https://${brandDomain}/research`, title: "Evidence-led audit research" }],
+			},
+		},
+		{
+			fixtureId: "unrelated-citation-near-target-mention-v2",
+			fixtureVersion: REPLAY_FIXTURE_SCHEMA_VERSION,
+			capturedAt: "2026-08-01T00:09:00.000Z",
+			intent: {
+				key: "unrelated-citation-near-target-mention",
+				version: 1,
+				name: "Unrelated citation near target",
+				description: "An independent source sits near a target mention but does not support that target claim.",
+			},
+			prompt: { version: 1, text: "Which products are discussed in current category coverage?" },
+			provider,
+			classificationContext: baseContext,
+			payload: {
+				schemaVersion: REPLAY_FIXTURE_SCHEMA_VERSION,
+				retrieved: true,
+				responseText: `${input.brand.name} is included in this overview. General category context: https://neutral-source.example/market.`,
+				citations: [{ url: "https://neutral-source.example/market", title: "General software market" }],
+			},
+		},
+		{
+			fixtureId: "ambiguous-category-human-review-v2",
+			fixtureVersion: REPLAY_FIXTURE_SCHEMA_VERSION,
+			capturedAt: "2026-08-01T00:10:00.000Z",
+			intent: {
+				key: "ambiguous-category-human-review",
+				version: 1,
+				name: "Ambiguous category language",
+				description: "Category-only language that requires human review rather than an inferred target match.",
+			},
+			prompt: { version: 1, text: "Are AI visibility platforms useful for evidence teams?" },
+			provider,
+			classificationContext: baseContext,
+			payload: {
+				schemaVersion: REPLAY_FIXTURE_SCHEMA_VERSION,
+				retrieved: true,
+				responseText:
+					"AI visibility platforms can help evidence teams, but the category wording does not identify a specific business.",
+				citations: [],
+			},
+		},
+		{
+			fixtureId: "no-target-retrieval-v2",
+			fixtureVersion: REPLAY_FIXTURE_SCHEMA_VERSION,
+			capturedAt: "2026-08-01T00:11:00.000Z",
+			intent: {
+				key: "no-target-retrieval",
+				version: 1,
+				name: "No target retrieval",
+				description: "The response retrieves a competitor but contains no target evidence.",
+			},
+			prompt: { version: 1, text: "Which workflow product was retrieved for this query?" },
+			provider,
+			classificationContext: baseContext,
+			payload: {
+				schemaVersion: REPLAY_FIXTURE_SCHEMA_VERSION,
+				retrieved: true,
+				responseText: `Only ${competitor.name} was retrieved for this query.`,
+				citations: [],
+			},
+		},
 	];
 
-	return fixtures.map((fixture) => replayFixtureSchema.parse(fixture));
+	return fixtures.map((fixture) =>
+		replayFixtureSchema.parse({
+			...fixture,
+			intent: { ...fixture.intent, version: 2 },
+			prompt: { ...fixture.prompt, version: 2 },
+		}),
+	);
 }
 
-function entityIdentities(input: ReplayAuditInput): EntityIdentityInput[] {
+function baseEntityIdentities(input: ReplayAuditInput, fixture: ReplayFixture): EntityIdentityInput[] {
 	const brandDomains = [input.brand.website, ...(input.brand.additionalDomains ?? [])]
 		.map(canonicalDomain)
 		.filter((domain): domain is string => Boolean(domain));
 	const replayCompetitors = input.competitors.length > 0 ? input.competitors : [effectiveCompetitor(input)];
+	const sharedAliases = fixture.classificationContext.sharedAlias ? [fixture.classificationContext.sharedAlias] : [];
 	return [
 		{
 			id: `brand:${input.brand.id}`,
 			role: "brand",
 			name: input.brand.name,
-			aliases: input.brand.aliases ?? [],
+			aliases: [...(input.brand.aliases ?? []), ...sharedAliases],
 			domains: brandDomains,
-			contextTerms: [],
+			contextTerms: fixture.classificationContext.categoryTerms,
 		},
 		...replayCompetitors.map((competitor) => ({
 			id: `competitor:${competitor.id}`,
 			role: "competitor" as const,
 			name: competitor.name,
-			aliases: competitor.aliases ?? [],
+			aliases: [...(competitor.aliases ?? []), ...sharedAliases],
 			domains: (competitor.domains ?? []).map(canonicalDomain).filter((domain): domain is string => Boolean(domain)),
 			contextTerms: [],
 		})),
+	];
+}
+
+function entityIdentities(input: ReplayAuditInput, fixture: ReplayFixture): EntityIdentityInput[] {
+	const tracked = baseEntityIdentities(input, fixture);
+	const trackedDomains = tracked.flatMap((identity) => identity.domains ?? []);
+	const unknownDomains = fixture.payload.citations
+		.map((citation) => normalizeHttpUrl(citation.url))
+		.filter(
+			(citation): citation is Extract<ReturnType<typeof normalizeHttpUrl>, { status: "normalized" }> =>
+				citation.status === "normalized",
+		)
+		.map((citation) => citation.normalizedDomain)
+		.filter((domain) => !isOwnedDomain(domain, trackedDomains));
+	return [
+		...tracked,
+		...[...new Set(unknownDomains)].map(
+			(domain): EntityIdentityInput => ({
+				id: `unknown-domain:${domain}`,
+				role: "unknown",
+				name: domain,
+				aliases: [],
+				domains: [domain],
+				contextTerms: [],
+			}),
+		),
 	];
 }
 
@@ -479,7 +772,8 @@ function sentenceBounds(content: string, offset: number): { start: number; end: 
 }
 
 function recommendationFor(content: string, classification: EntityClassification): RecommendationEvidence {
-	for (const entityMatch of classification.acceptedMatches) {
+	const eligibleMatches = classification.acceptedMatches.filter((match) => match.source !== "domain");
+	for (const entityMatch of eligibleMatches) {
 		const sentence = sentenceBounds(content, entityMatch.start);
 		const sentenceText = content.slice(sentence.start, sentence.end);
 		const cuePattern = /\b(?:recommend(?:ed|s|ing)?|top choice|best option)\b/giu;
@@ -488,10 +782,37 @@ function recommendationFor(content: string, classification: EntityClassification
 			const cueStart = sentence.start + relativeStart;
 			const cue = cueMatch[0];
 			const preceding = content.slice(Math.max(sentence.start, cueStart - 24), cueStart);
-			if (/\b(?:not|never|avoid|cannot|can't|do not|don't)\b/iu.test(preceding)) continue;
+			if (/\b(?:not|never|avoid|cannot|can't|do not|don't)\b/iu.test(preceding)) {
+				return {
+					status: "rejected",
+					rule: "same_sentence_negated_recommendation_cue",
+					confidence: 0.95,
+					reasonCodes: ["recommendation_cue_negated"],
+					cue,
+					cueStart,
+					cueEnd: cueStart + cue.length,
+					entityMatchStart: entityMatch.start,
+					entityMatchEnd: entityMatch.end,
+				};
+			}
+			if (/\b(?:might|may|could|possibly|perhaps|consider)\b/iu.test(preceding)) {
+				return {
+					status: "ambiguous",
+					rule: "same_sentence_uncertain_recommendation_cue",
+					confidence: 0.6,
+					reasonCodes: ["uncertain_recommendation_language", "human_review_required"],
+					cue,
+					cueStart,
+					cueEnd: cueStart + cue.length,
+					entityMatchStart: entityMatch.start,
+					entityMatchEnd: entityMatch.end,
+				};
+			}
 			return {
 				status: "accepted",
 				rule: "same_sentence_positive_recommendation_cue",
+				confidence: 0.94,
+				reasonCodes: ["positive_recommendation_cue", "accepted_identity_in_same_sentence"],
 				cue,
 				cueStart,
 				cueEnd: cueStart + cue.length,
@@ -500,10 +821,451 @@ function recommendationFor(content: string, classification: EntityClassification
 			};
 		}
 	}
+	if (
+		classification.rejectedMatches.length > 0 &&
+		/\b(?:recommend(?:ed|s|ing)?|top choice|best option)\b/iu.test(content)
+	) {
+		return {
+			status: "ambiguous",
+			rule: "recommendation_cue_with_ambiguous_identity_match",
+			confidence: 0.5,
+			reasonCodes: ["identity_match_not_accepted", "human_review_required"],
+		};
+	}
 	return {
 		status: "not_detected",
 		rule: "no_positive_recommendation_cue_for_accepted_identity_match",
+		confidence: 1,
+		reasonCodes: ["no_recommendation_cue_linked_to_entity"],
 	};
+}
+
+function excerptForSpan(content: string, start: number, end: number): { excerpt: string; start: number; end: number } {
+	const radius = 70;
+	const excerptStart = Math.max(0, start - radius);
+	const excerptEnd = Math.min(content.length, Math.max(end, start) + radius);
+	return { excerpt: content.slice(excerptStart, excerptEnd), start: excerptStart, end: excerptEnd };
+}
+
+function explicitProminenceRank(content: string, matchStart: number): number | null {
+	const lineStart = content.lastIndexOf("\n", matchStart - 1) + 1;
+	const prefix = content.slice(lineStart, matchStart);
+	const ordinal = prefix.match(/^\s*(\d{1,3})[.)]\s/u);
+	return ordinal ? Number.parseInt(ordinal[1], 10) : null;
+}
+
+function prominenceRanks(content: string, classifications: EntityClassification[]): Map<string, number> {
+	const ranks = new Map<string, number>();
+	const proseMatches = classifications
+		.map((classification) => ({
+			classification,
+			match: classification.acceptedMatches.find((match) => match.source !== "domain"),
+		}))
+		.filter(
+			(
+				entry,
+			): entry is { classification: EntityClassification; match: EntityClassification["acceptedMatches"][number] } =>
+				Boolean(entry.match),
+		)
+		.sort((left, right) => left.match.start - right.match.start);
+	for (const [index, entry] of proseMatches.entries()) {
+		ranks.set(entry.classification.identity.id, explicitProminenceRank(content, entry.match.start) ?? index + 1);
+	}
+	return ranks;
+}
+
+function entityTypeFor(role: EvidenceEntityRole): EvidenceEntityType {
+	if (role === "brand") return "target_business";
+	if (role === "competitor") return "competitor";
+	return "unrelated_unknown";
+}
+
+function decision(
+	status: EvidenceDecisionStatus,
+	value: boolean | number | string | null,
+	rule: string,
+	confidence: number,
+	reasonCodes: string[],
+	sourceEvidenceIds: string[],
+): ClassificationDecision {
+	return { status, value, rule, confidence, reasonCodes, sourceEvidenceIds };
+}
+
+function sourceFromIdentityMatch(
+	providerRunId: string,
+	classification: EntityClassification,
+	match: EntityClassification["acceptedMatches"][number] | EntityClassification["rejectedMatches"][number],
+	index: number,
+): ClassificationSourceEvidence {
+	const isAccepted = match.disposition === "accepted";
+	const ambiguous =
+		!isAccepted && ["ambiguous_without_corroboration", "identity_collision"].includes(match.rejectionReason);
+	return {
+		id: deterministicUuid(
+			`classification-source:${providerRunId}:${classification.identity.id}:${match.source}:${match.start}:${match.end}:${index}`,
+		),
+		kind: "identity_match",
+		disposition: isAccepted ? "accepted" : ambiguous ? "ambiguous" : "rejected",
+		matchedIdentityTerm: match.source === "domain" ? null : match.matchedTerm,
+		matchedDomain: match.source === "domain" ? match.matchedTerm : null,
+		matchedAlias: match.source === "alias" ? match.matchedTerm : null,
+		matchRule: match.rule,
+		classifierId: ENTITY_CLASSIFIER_ID,
+		classifierVersion: ENTITY_CLASSIFIER_VERSION,
+		excerpt: match.excerpt,
+		start: match.excerptStart,
+		end: match.excerptEnd,
+		confidence: match.confidence,
+		reasonCodes: isAccepted ? ["identity_match_accepted"] : [match.rejectionReason],
+		sourceEvidenceIds: [],
+	};
+}
+
+function categoryAmbiguitySource(
+	providerRunId: string,
+	content: string,
+	classification: EntityClassification,
+): ClassificationSourceEvidence | null {
+	if (classification.identity.role !== "brand" || classification.acceptedMatches.length > 0) return null;
+	const lower = content.toLocaleLowerCase("en");
+	for (const term of [...classification.identity.contextTerms].sort((left, right) => right.length - left.length)) {
+		const start = lower.indexOf(term.toLocaleLowerCase("en"));
+		if (start < 0) continue;
+		const end = start + term.length;
+		const excerpt = excerptForSpan(content, start, end);
+		return {
+			id: deterministicUuid(
+				`classification-source:${providerRunId}:${classification.identity.id}:category:${start}:${end}`,
+			),
+			kind: "identity_match",
+			disposition: "ambiguous",
+			matchedIdentityTerm: term,
+			matchedDomain: null,
+			matchedAlias: null,
+			matchRule: "category_language_does_not_establish_business_identity",
+			classifierId: EVIDENCE_CLASSIFIER_ID,
+			classifierVersion: EVIDENCE_CLASSIFIER_VERSION,
+			excerpt: excerpt.excerpt,
+			start: excerpt.start,
+			end: excerpt.end,
+			confidence: 0.35,
+			reasonCodes: ["category_language_only", "specific_business_identity_missing", "human_review_required"],
+			sourceEvidenceIds: [],
+		};
+	}
+	return null;
+}
+
+function refreshReview(trace: EntityClassificationTrace): void {
+	const ambiguousDecisions = Object.entries(trace.decisions)
+		.filter(([, value]) => value.status === "ambiguous")
+		.map(([key]) => `ambiguous_${key}`);
+	const lowConfidence = trace.sources.some(
+		(source) => source.disposition !== "rejected" && source.confidence < HUMAN_REVIEW_CONFIDENCE_THRESHOLD,
+	);
+	const reasonCodes = [...ambiguousDecisions];
+	if (lowConfidence) reasonCodes.push("low_confidence_evidence");
+	trace.review = {
+		state: reasonCodes.length > 0 ? "pending" : "not_required",
+		reasonCodes,
+	};
+}
+
+function initialClassificationTrace(input: {
+	providerRunId: string;
+	content: string;
+	providerRetrieved: boolean;
+	classification: EntityClassification;
+	prominenceRank: number | null;
+}): { trace: EntityClassificationTrace; recommendation: RecommendationEvidence } {
+	const { providerRunId, content, providerRetrieved, classification, prominenceRank } = input;
+	const identitySources = [
+		...classification.acceptedMatches.map((match, index) =>
+			sourceFromIdentityMatch(providerRunId, classification, match, index),
+		),
+		...classification.rejectedMatches.map((match, index) =>
+			sourceFromIdentityMatch(providerRunId, classification, match, classification.acceptedMatches.length + index),
+		),
+	];
+	const categorySource = categoryAmbiguitySource(providerRunId, content, classification);
+	if (categorySource) identitySources.push(categorySource);
+	const acceptedIdentitySources = identitySources.filter((source) => source.disposition === "accepted");
+	const acceptedMentionSources = acceptedIdentitySources.filter((source) => source.matchedDomain === null);
+	const ambiguousSources = identitySources.filter((source) => source.disposition === "ambiguous");
+	const recommendation = recommendationFor(content, classification);
+	const sources = [...identitySources];
+	let recommendationSourceIds: string[] = [];
+	if (recommendation.status !== "not_detected") {
+		const cueStart = recommendation.cueStart ?? classification.rejectedMatches[0]?.start ?? 0;
+		const cueEnd = recommendation.cueEnd ?? classification.rejectedMatches[0]?.end ?? cueStart;
+		const entityStart = recommendation.entityMatchStart ?? cueStart;
+		const entityEnd = recommendation.entityMatchEnd ?? cueEnd;
+		const excerpt = excerptForSpan(content, Math.min(cueStart, entityStart), Math.max(cueEnd, entityEnd));
+		const source: ClassificationSourceEvidence = {
+			id: deterministicUuid(`classification-source:${providerRunId}:${classification.identity.id}:recommendation`),
+			kind: "recommendation_cue",
+			disposition:
+				recommendation.status === "accepted"
+					? "accepted"
+					: recommendation.status === "ambiguous"
+						? "ambiguous"
+						: "rejected",
+			matchedIdentityTerm: classification.identity.name,
+			matchedDomain: null,
+			matchedAlias: null,
+			matchRule: recommendation.rule,
+			classifierId: EVIDENCE_CLASSIFIER_ID,
+			classifierVersion: EVIDENCE_CLASSIFIER_VERSION,
+			excerpt: excerpt.excerpt,
+			start: excerpt.start,
+			end: excerpt.end,
+			confidence: recommendation.confidence,
+			reasonCodes: recommendation.reasonCodes,
+			sourceEvidenceIds: ambiguousSources.map((candidate) => candidate.id),
+		};
+		sources.push(source);
+		recommendationSourceIds = [source.id];
+	}
+
+	let prominenceSourceIds: string[] = [];
+	if (prominenceRank !== null) {
+		const identitySource = acceptedMentionSources[0];
+		if (identitySource) {
+			const source: ClassificationSourceEvidence = {
+				...identitySource,
+				id: deterministicUuid(`classification-source:${providerRunId}:${classification.identity.id}:prominence`),
+				kind: "prominence",
+				matchRule: explicitProminenceRank(content, classification.acceptedMatches[0]?.start ?? 0)
+					? "explicit_ordinal_rank"
+					: "accepted_entity_mention_order",
+				reasonCodes: [`prominence_rank_${prominenceRank}`],
+				sourceEvidenceIds: [identitySource.id],
+			};
+			sources.push(source);
+			prominenceSourceIds = [source.id];
+		}
+	}
+
+	const mentionDecision =
+		acceptedMentionSources.length > 0
+			? decision(
+					"accepted",
+					true,
+					"accepted_name_or_alias_identity_match",
+					0.94,
+					["specific_identity_mentioned"],
+					acceptedMentionSources.map((source) => source.id),
+				)
+			: ambiguousSources.length > 0
+				? decision(
+						"ambiguous",
+						null,
+						"identity_match_requires_human_review",
+						0.5,
+						["identity_not_safely_resolved"],
+						ambiguousSources.map((source) => source.id),
+					)
+				: decision("not_detected", false, "no_name_or_alias_identity_match", 1, ["no_specific_entity_mention"], []);
+	const retrievalDecision = !providerRetrieved
+		? decision("rejected", false, "provider_returned_no_response", 1, ["provider_response_not_retrieved"], [])
+		: acceptedIdentitySources.length > 0
+			? decision(
+					"accepted",
+					true,
+					"accepted_identity_evidence_retrieved",
+					0.95,
+					["entity_identity_evidence_present"],
+					acceptedIdentitySources.map((source) => source.id),
+				)
+			: ambiguousSources.length > 0
+				? decision(
+						"ambiguous",
+						null,
+						"retrieval_identity_ambiguous",
+						0.5,
+						["retrieved_response_has_ambiguous_identity_evidence"],
+						ambiguousSources.map((source) => source.id),
+					)
+				: decision(
+						"not_detected",
+						false,
+						"no_entity_retrieval_evidence",
+						1,
+						["entity_absent_from_retrieved_response"],
+						[],
+					);
+	const recommendationDecision = decision(
+		recommendation.status,
+		recommendation.status === "accepted" ? true : recommendation.status === "ambiguous" ? null : false,
+		recommendation.rule,
+		recommendation.confidence,
+		recommendation.reasonCodes,
+		recommendationSourceIds,
+	);
+	const entityType = entityTypeFor(classification.identity.role);
+	const trace: EntityClassificationTrace = {
+		schemaVersion: AUDIT_RECORD_SCHEMA_VERSION,
+		classifier: { id: EVIDENCE_CLASSIFIER_ID, version: EVIDENCE_CLASSIFIER_VERSION, deterministic: true },
+		entityType,
+		review: { state: "not_required", reasonCodes: [] },
+		decisions: {
+			retrieved: retrievalDecision,
+			mentioned: mentionDecision,
+			recommended: recommendationDecision,
+			prominence:
+				prominenceRank === null
+					? decision("not_detected", null, "no_accepted_prose_mention_to_rank", 1, ["prominence_not_available"], [])
+					: decision(
+							"accepted",
+							prominenceRank,
+							"deterministic_response_rank",
+							0.95,
+							[`rank_${prominenceRank}`],
+							prominenceSourceIds,
+						),
+			cited: decision("not_detected", false, "no_supporting_citation_link", 1, ["citation_support_not_linked"], []),
+			entityType: decision(
+				"accepted",
+				entityType,
+				"configured_identity_role",
+				1,
+				[`entity_type_${entityType}`],
+				acceptedIdentitySources.map((source) => source.id),
+			),
+		},
+		sources,
+	};
+	refreshReview(trace);
+	return { trace, recommendation };
+}
+
+function citationSourceSpan(
+	content: string,
+	citation: CitationEvidenceRecord,
+	entity: EntityIdentityEvidenceRecord,
+): { excerpt: string; start: number; end: number } {
+	const candidates = [citation.originalUrl, citation.normalizedUrl, citation.normalizedDomain].filter(
+		(value): value is string => Boolean(value),
+	);
+	for (const candidate of candidates) {
+		const start = content.toLocaleLowerCase("en").indexOf(candidate.toLocaleLowerCase("en"));
+		if (start >= 0) return excerptForSpan(content, start, start + candidate.length);
+	}
+	const match = entity.matchEvidence.acceptedMatches[0] ?? entity.matchEvidence.rejectedMatches[0];
+	if (match) return { excerpt: match.excerpt, start: match.excerptStart, end: match.excerptEnd };
+	return { excerpt: "", start: 0, end: 0 };
+}
+
+function createCitationClaimLink(input: {
+	providerCorrelationId: string;
+	citation: CitationEvidenceRecord;
+	entity: EntityIdentityEvidenceRecord;
+	claim: CitationClaimType;
+	status: EvidenceDecisionStatus;
+	reasonCodes: string[];
+	confidence: number;
+	content: string;
+	createdAt: Date;
+}): CitationClaimEvidenceLinkRecord {
+	const id = deterministicUuid(`citation-claim:${input.citation.id}:${input.entity.id}:${input.claim}:${input.status}`);
+	const span = citationSourceSpan(input.content, input.citation, input.entity);
+	return {
+		id,
+		citationEvidenceId: input.citation.id,
+		entityEvidenceId: input.entity.id,
+		schemaVersion: AUDIT_RECORD_SCHEMA_VERSION,
+		correlationId: `${input.providerCorrelationId}:citation-claim:${id}`,
+		claim: input.claim,
+		status: input.status,
+		classifierId: EVIDENCE_CLASSIFIER_ID,
+		classifierVersion: EVIDENCE_CLASSIFIER_VERSION,
+		sourceExcerpt: span.excerpt,
+		excerptStart: span.start,
+		excerptEnd: span.end,
+		confidence: input.confidence,
+		reasonCodes: input.reasonCodes,
+		sourceEvidenceIds: [input.citation.id],
+		createdAt: input.createdAt,
+	};
+}
+
+function applyCitationLinksToEntity(
+	entity: EntityIdentityEvidenceRecord,
+	links: CitationClaimEvidenceLinkRecord[],
+	citationsById: Map<string, CitationEvidenceRecord>,
+): void {
+	const entityLinks = links.filter((link) => link.entityEvidenceId === entity.id);
+	for (const link of entityLinks) {
+		const citation = citationsById.get(link.citationEvidenceId);
+		entity.classificationEvidence.sources.push({
+			id: link.id,
+			kind: "citation",
+			disposition: link.status === "accepted" ? "accepted" : link.status === "ambiguous" ? "ambiguous" : "rejected",
+			matchedIdentityTerm: entity.identitySnapshot.name,
+			matchedDomain: citation?.normalizedDomain ?? null,
+			matchedAlias: null,
+			matchRule: link.reasonCodes[0] ?? "citation_claim_link",
+			classifierId: link.classifierId,
+			classifierVersion: link.classifierVersion,
+			excerpt: link.sourceExcerpt,
+			start: link.excerptStart,
+			end: link.excerptEnd,
+			confidence: link.confidence,
+			reasonCodes: link.reasonCodes,
+			sourceEvidenceIds: link.sourceEvidenceIds,
+		});
+	}
+	const accepted = entityLinks.filter((link) => link.status === "accepted");
+	const ambiguous = entityLinks.filter((link) => link.status === "ambiguous");
+	const rejected = entityLinks.filter((link) => link.status === "rejected");
+	entity.classificationEvidence.decisions.cited =
+		accepted.length > 0
+			? decision(
+					"accepted",
+					true,
+					"accepted_citation_entity_claim_link",
+					0.99,
+					["citation_link_supports_entity_identity"],
+					accepted.map((link) => link.id),
+				)
+			: ambiguous.length > 0
+				? decision(
+						"ambiguous",
+						null,
+						"citation_entity_claim_requires_review",
+						0.5,
+						["citation_link_ambiguous"],
+						ambiguous.map((link) => link.id),
+					)
+				: rejected.length > 0
+					? decision(
+							"rejected",
+							false,
+							"citation_does_not_support_entity_claim",
+							0.98,
+							["citation_present_but_not_linked_to_entity"],
+							rejected.map((link) => link.id),
+						)
+					: decision("not_detected", false, "no_citation_entity_claim_link", 1, ["no_citation_support_for_entity"], []);
+	if (
+		entity.classificationEvidence.decisions.retrieved.status !== "accepted" &&
+		entity.classificationEvidence.decisions.cited.status === "accepted"
+	) {
+		entity.classificationEvidence.decisions.retrieved = decision(
+			"accepted",
+			true,
+			"accepted_owned_domain_citation_retrieval",
+			0.99,
+			["entity_retrieved_through_owned_domain_citation"],
+			accepted.map((link) => link.id),
+		);
+	}
+	entity.retrieved = entity.classificationEvidence.decisions.retrieved.status === "accepted";
+	entity.mentioned = entity.classificationEvidence.decisions.mentioned.status === "accepted";
+	entity.recommended = entity.classificationEvidence.decisions.recommended.status === "accepted";
+	entity.cited = entity.classificationEvidence.decisions.cited.status === "accepted";
+	refreshReview(entity.classificationEvidence);
+	entity.reviewState = entity.classificationEvidence.review.state;
 }
 
 export function classifyCitationType(url: string, brandDomains: string[], competitorDomains: string[]): CitationType {
@@ -514,10 +1276,6 @@ export function classifyCitationType(url: string, brandDomains: string[], compet
 	return "independent";
 }
 
-function citationSupportsIdentity(domain: string | null, identity: EntityIdentityInput): boolean {
-	return domain !== null && isOwnedDomain(domain, identity.domains ?? []);
-}
-
 export function createReplayAuditBundle(input: ReplayAuditInput): ReplayAuditBundle {
 	if (!input.correlationId.trim()) throw new Error("A replay correlation ID is required");
 	if (Number.isNaN(input.replayedAt.getTime())) throw new Error("A valid replay timestamp is required");
@@ -525,11 +1283,11 @@ export function createReplayAuditBundle(input: ReplayAuditInput): ReplayAuditBun
 	const fixtures = createReplayFixtures(input);
 	const fixtureSetChecksum = sha256(fixtures);
 	const auditRunId = deterministicUuid(`audit-run:${input.correlationId}`);
-	const identities = entityIdentities(input);
-	const brandDomains = identities
+	const configuredIdentities = baseEntityIdentities(input, fixtures[0]);
+	const brandDomains = configuredIdentities
 		.filter((identity) => identity.role === "brand")
 		.flatMap((identity) => identity.domains ?? []);
-	const competitorDomains = identities
+	const competitorDomains = configuredIdentities
 		.filter((identity) => identity.role === "competitor")
 		.flatMap((identity) => identity.domains ?? []);
 	const replayedAt = new Date(input.replayedAt);
@@ -567,11 +1325,12 @@ export function createReplayAuditBundle(input: ReplayAuditInput): ReplayAuditBun
 		responsePayloads: [],
 		citationEvidence: [],
 		entityEvidence: [],
+		citationClaimLinks: [],
 	};
 
 	for (const fixture of fixtures) {
 		const intentFamilyId = deterministicUuid(
-			`intent-family:${input.brand.id}:${fixture.intent.key}:${fixture.intent.version}`,
+			`intent-family:${AUDIT_RECORD_SCHEMA_VERSION}:${input.brand.id}:${fixture.intent.key}:${fixture.intent.version}`,
 		);
 		const promptVariantId = deterministicUuid(
 			`prompt-variant:${intentFamilyId}:${fixture.prompt.version}:${sha256(fixture.prompt.text)}`,
@@ -631,11 +1390,13 @@ export function createReplayAuditBundle(input: ReplayAuditInput): ReplayAuditBun
 			createdAt: replayedAt,
 		});
 
+		const identities = entityIdentities(input, fixture);
 		const classified = classifyEntities({
 			content: fixture.payload.responseText,
 			entities: identities,
 			citationCount: fixture.payload.citations.length,
 		});
+		const ranks = prominenceRanks(fixture.payload.responseText, classified.entities);
 		const citationRows = fixture.payload.citations.map((citation, citationIndex) => {
 			const normalized = normalizeHttpUrl(citation.url);
 			const normalizedUrl = normalized.status === "normalized" ? normalized.normalizedUrl : null;
@@ -662,12 +1423,15 @@ export function createReplayAuditBundle(input: ReplayAuditInput): ReplayAuditBun
 		});
 		bundle.citationEvidence.push(...citationRows);
 
-		for (const classification of classified.entities) {
-			const recommendationEvidence = recommendationFor(fixture.payload.responseText, classification);
-			const cited = citationRows.some((citation) =>
-				citationSupportsIdentity(citation.normalizedDomain, classification.identity),
-			);
-			bundle.entityEvidence.push({
+		const entityRows = classified.entities.map((classification): EntityIdentityEvidenceRecord => {
+			const { trace, recommendation } = initialClassificationTrace({
+				providerRunId,
+				content: fixture.payload.responseText,
+				providerRetrieved: fixture.payload.retrieved,
+				classification,
+				prominenceRank: ranks.get(classification.identity.id) ?? null,
+			});
+			return {
 				id: deterministicUuid(`entity-evidence:${providerRunId}:${classification.identity.id}`),
 				providerRunId,
 				responsePayloadId,
@@ -676,17 +1440,81 @@ export function createReplayAuditBundle(input: ReplayAuditInput): ReplayAuditBun
 				entityId: classification.identity.id,
 				entityRole: classification.identity.role,
 				identityVersion: 1,
-				retrieved: fixture.payload.retrieved,
-				mentioned: classification.status !== "not_mentioned",
-				recommended: recommendationEvidence.status === "accepted",
-				cited,
+				retrieved: trace.decisions.retrieved.status === "accepted",
+				mentioned: trace.decisions.mentioned.status === "accepted",
+				recommended: trace.decisions.recommended.status === "accepted",
+				cited: false,
+				prominenceRank: ranks.get(classification.identity.id) ?? null,
+				reviewState: trace.review.state,
 				extractorId: REPLAY_EXTRACTOR_ID,
 				extractorVersion: REPLAY_EXTRACTOR_VERSION,
 				identitySnapshot: classification.identity,
 				matchEvidence: classification,
-				recommendationEvidence,
+				recommendationEvidence: recommendation,
+				classificationEvidence: trace,
 				extractedAt: replayedAt,
-			});
+			};
+		});
+		bundle.entityEvidence.push(...entityRows);
+
+		const fixtureLinks: CitationClaimEvidenceLinkRecord[] = [];
+		for (const citation of citationRows) {
+			const trackedOwners = entityRows.filter(
+				(entity) =>
+					entity.entityRole !== "unknown" &&
+					citation.normalizedDomain !== null &&
+					isOwnedDomain(citation.normalizedDomain, entity.identitySnapshot.domains ?? []),
+			);
+			const unknownOwners = entityRows.filter(
+				(entity) =>
+					entity.entityRole === "unknown" &&
+					citation.normalizedDomain !== null &&
+					isOwnedDomain(citation.normalizedDomain, entity.identitySnapshot.domains ?? []),
+			);
+			for (const owner of [...trackedOwners, ...unknownOwners]) {
+				fixtureLinks.push(
+					createCitationClaimLink({
+						providerCorrelationId,
+						citation,
+						entity: owner,
+						claim: "identity",
+						status: "accepted",
+						reasonCodes: [
+							owner.entityRole === "unknown"
+								? "citation_domain_identifies_unrelated_unknown_entity"
+								: "citation_domain_owned_by_entity",
+						],
+						confidence: 0.99,
+						content: fixture.payload.responseText,
+						createdAt: replayedAt,
+					}),
+				);
+			}
+			if (trackedOwners.length === 0) {
+				for (const mentionedEntity of entityRows.filter(
+					(entity) =>
+						entity.entityRole !== "unknown" && entity.classificationEvidence.decisions.mentioned.status === "accepted",
+				)) {
+					fixtureLinks.push(
+						createCitationClaimLink({
+							providerCorrelationId,
+							citation,
+							entity: mentionedEntity,
+							claim: "mention",
+							status: "rejected",
+							reasonCodes: ["citation_domain_not_owned_by_entity", "proximity_does_not_establish_support"],
+							confidence: 0.98,
+							content: fixture.payload.responseText,
+							createdAt: replayedAt,
+						}),
+					);
+				}
+			}
+		}
+		bundle.citationClaimLinks.push(...fixtureLinks);
+		const citationsById = new Map(citationRows.map((citation) => [citation.id, citation]));
+		for (const entity of entityRows) {
+			applyCitationLinksToEntity(entity, fixtureLinks, citationsById);
 		}
 	}
 
@@ -708,10 +1536,12 @@ export function summarizeReplayAudit(bundle: ReplayAuditBundle): ReplayAuditSumm
 		providerRunCount: bundle.providerRuns.length,
 		entityEvidenceCount: bundle.entityEvidence.length,
 		citationEvidenceCount: bundle.citationEvidence.length,
+		citationClaimLinkCount: bundle.citationClaimLinks.length,
 		retrievedRuns: bundle.providerRuns.filter((run) => run.retrievalStatus === "retrieved").length,
 		mentionedEntities: bundle.entityEvidence.filter((evidence) => evidence.mentioned).length,
 		recommendedEntities: bundle.entityEvidence.filter((evidence) => evidence.recommended).length,
 		citedEntities: bundle.entityEvidence.filter((evidence) => evidence.cited).length,
+		pendingReviewEntities: bundle.entityEvidence.filter((evidence) => evidence.reviewState === "pending").length,
 		citationTypes,
 		completedAt: bundle.auditRun.completedAt.toISOString(),
 	};

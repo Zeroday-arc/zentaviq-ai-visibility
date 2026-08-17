@@ -2,11 +2,13 @@ import { and, desc, eq, inArray } from "drizzle-orm";
 import { db } from "../src/db/db";
 import {
 	auditRuns,
+	citationClaimEvidenceLinks,
 	citationEvidenceRecords,
 	entityIdentityEvidenceRecords,
 	providerResponsePayloads,
 	providerRuns,
 } from "../src/db/schema";
+import { AUDIT_RECORD_SCHEMA_VERSION } from "../src/replay-audit";
 
 function assertLocalDatabase(): void {
 	const databaseUrl = process.env.DATABASE_URL;
@@ -39,7 +41,13 @@ async function main(): Promise<void> {
 	const [latest] = await db
 		.select()
 		.from(auditRuns)
-		.where(and(eq(auditRuns.runKind, "baseline"), eq(auditRuns.executionMode, "fixture_replay")))
+		.where(
+			and(
+				eq(auditRuns.runKind, "baseline"),
+				eq(auditRuns.executionMode, "fixture_replay"),
+				eq(auditRuns.schemaVersion, AUDIT_RECORD_SCHEMA_VERSION),
+			),
+		)
 		.orderBy(desc(auditRuns.completedAt))
 		.limit(1);
 	if (!latest) throw new Error("No persisted fixture replay baseline found");
@@ -55,7 +63,12 @@ async function main(): Promise<void> {
 			.from(providerResponsePayloads)
 			.where(inArray(providerResponsePayloads.providerRunId, runIds)),
 		db
-			.select({ id: entityIdentityEvidenceRecords.id })
+			.select({
+				id: entityIdentityEvidenceRecords.id,
+				role: entityIdentityEvidenceRecords.entityRole,
+				reviewState: entityIdentityEvidenceRecords.reviewState,
+				classificationEvidence: entityIdentityEvidenceRecords.classificationEvidence,
+			})
 			.from(entityIdentityEvidenceRecords)
 			.where(inArray(entityIdentityEvidenceRecords.providerRunId, runIds)),
 		db
@@ -63,6 +76,15 @@ async function main(): Promise<void> {
 			.from(citationEvidenceRecords)
 			.where(inArray(citationEvidenceRecords.providerRunId, runIds)),
 	]);
+	const entityIds = entities.map((entity) => entity.id);
+	const claimLinks = await db
+		.select({
+			id: citationClaimEvidenceLinks.id,
+			status: citationClaimEvidenceLinks.status,
+			correlationId: citationClaimEvidenceLinks.correlationId,
+		})
+		.from(citationClaimEvidenceLinks)
+		.where(inArray(citationClaimEvidenceLinks.entityEvidenceId, entityIds));
 
 	let immutableUpdateRejected = false;
 	try {
@@ -72,6 +94,19 @@ async function main(): Promise<void> {
 		if (!immutableUpdateRejected) throw error;
 	}
 	if (!immutableUpdateRejected) throw new Error("Immutable audit update was not rejected");
+	let immutableClaimLinkUpdateRejected = false;
+	const firstClaimLink = claimLinks[0];
+	if (!firstClaimLink) throw new Error("No citation claim link was persisted");
+	try {
+		await db
+			.update(citationClaimEvidenceLinks)
+			.set({ correlationId: firstClaimLink.correlationId })
+			.where(eq(citationClaimEvidenceLinks.id, firstClaimLink.id));
+	} catch (error) {
+		immutableClaimLinkUpdateRejected = isImmutableUpdateError(error);
+		if (!immutableClaimLinkUpdateRejected) throw error;
+	}
+	if (!immutableClaimLinkUpdateRejected) throw new Error("Immutable citation claim link update was not rejected");
 
 	const citationTypes = citations.reduce<Record<string, number>>((counts, citation) => {
 		counts[citation.citationType] = (counts[citation.citationType] ?? 0) + 1;
@@ -83,15 +118,30 @@ async function main(): Promise<void> {
 		responsePayloads: payloads.length,
 		entityEvidence: entities.length,
 		citationEvidence: citations.length,
+		citationClaimLinks: claimLinks.length,
+		acceptedCitationClaimLinks: claimLinks.filter((link) => link.status === "accepted").length,
+		rejectedCitationClaimLinks: claimLinks.filter((link) => link.status === "rejected").length,
+		pendingReviewEntities: entities.filter((entity) => entity.reviewState === "pending").length,
+		unknownEntities: entities.filter((entity) => entity.role === "unknown").length,
+		classificationTraces: entities.filter(
+			(entity) => Object.keys(entity.classificationEvidence as Record<string, unknown>).length > 0,
+		).length,
 		citationTypes,
 		fixtureSetChecksumLength: latest.fixtureSetChecksum.length,
 		immutableUpdateRejected,
+		immutableClaimLinkUpdateRejected,
 	};
 	if (
-		verification.providerRuns !== 4 ||
-		verification.responsePayloads !== 4 ||
-		verification.entityEvidence !== 8 ||
-		verification.citationEvidence !== 3 ||
+		verification.providerRuns !== 12 ||
+		verification.responsePayloads !== 12 ||
+		verification.entityEvidence !== 26 ||
+		verification.citationEvidence !== 5 ||
+		verification.citationClaimLinks !== 6 ||
+		verification.acceptedCitationClaimLinks !== 5 ||
+		verification.rejectedCitationClaimLinks !== 1 ||
+		verification.pendingReviewEntities !== 3 ||
+		verification.unknownEntities !== 2 ||
+		verification.classificationTraces !== 26 ||
 		verification.fixtureSetChecksumLength !== 64
 	) {
 		throw new Error(`Persisted replay evidence is incomplete: ${JSON.stringify(verification)}`);

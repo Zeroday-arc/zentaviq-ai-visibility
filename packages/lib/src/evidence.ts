@@ -11,7 +11,7 @@ export const RECOMMENDATION_CLASSIFICATION_DESCRIPTION =
 export const MAX_EVIDENCE_EXCERPT_LENGTH = 160;
 
 export const entityStatusSchema = z.enum(["not_mentioned", "mentioned", "recommended"]);
-export const entityRoleSchema = z.enum(["brand", "competitor"]);
+export const entityRoleSchema = z.enum(["brand", "competitor", "unknown"]);
 export const citationPresenceStatusSchema = z.enum(["none", "present"]);
 export const urlNormalizationStatusSchema = z.enum(["normalized", "invalid"]);
 export const citationVerificationStatusSchema = z.enum([

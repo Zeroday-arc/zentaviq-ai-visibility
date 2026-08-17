@@ -9,15 +9,65 @@ import { persistReplayAuditBundle } from "@workspace/lib/db/evidence-store";
 import {
 	auditRuns,
 	brands,
+	citationClaimEvidenceLinks,
 	citationEvidenceRecords,
 	competitors,
 	entityIdentityEvidenceRecords,
+	frozenPromptVariants,
 	providerResponsePayloads,
 	providerRuns,
 } from "@workspace/lib/db/schema";
-import { createReplayAuditBundle, type CitationType, type ReplayAuditSummary } from "@workspace/lib/replay-audit";
+import {
+	AUDIT_RECORD_SCHEMA_VERSION,
+	createReplayAuditBundle,
+	type CitationType,
+	type EntityClassificationTrace,
+	type ReplayAuditSummary,
+} from "@workspace/lib/replay-audit";
 
 const brandInputSchema = z.object({ brandId: z.string().min(1) });
+
+export interface ReplayEvidenceView {
+	summary: ReplayAuditSummary;
+	scenarios: Array<{
+		fixtureId: string;
+		promptText: string;
+		rawResponse: string;
+		providerRetrieved: boolean;
+		correlationId: string;
+		extractorId: string;
+		extractorVersion: string;
+		entities: Array<{
+			id: string;
+			name: string;
+			role: "brand" | "competitor" | "unknown";
+			retrieved: boolean;
+			mentioned: boolean;
+			recommended: boolean;
+			prominenceRank: number | null;
+			cited: boolean;
+			reviewState: "not_required" | "pending" | "accepted" | "rejected";
+			trace: EntityClassificationTrace;
+		}>;
+		citations: Array<{
+			id: string;
+			type: CitationType;
+			url: string;
+			title: string | null;
+			links: Array<{
+				entityEvidenceId: string;
+				entityName: string;
+				claim: "identity" | "mention" | "recommendation";
+				status: "accepted" | "rejected" | "ambiguous" | "not_detected";
+				rule: string;
+				classifierVersion: string;
+				excerpt: string;
+				start: number;
+				end: number;
+			}>;
+		}>;
+	}>;
+}
 
 function requireLocalReplayMode(): void {
 	if (getDeployment().mode !== "local") {
@@ -44,10 +94,12 @@ async function readPersistedSummary(auditRunId: string): Promise<ReplayAuditSumm
 			providerRunCount: 0,
 			entityEvidenceCount: 0,
 			citationEvidenceCount: 0,
+			citationClaimLinkCount: 0,
 			retrievedRuns: 0,
 			mentionedEntities: 0,
 			recommendedEntities: 0,
 			citedEntities: 0,
+			pendingReviewEntities: 0,
 			citationTypes: { first_party: 0, independent: 0, competitor: 0, unknown: 0 },
 			completedAt: auditRun.completedAt.toISOString(),
 		};
@@ -60,9 +112,11 @@ async function readPersistedSummary(auditRunId: string): Promise<ReplayAuditSumm
 			.where(inArray(providerResponsePayloads.providerRunId, runIds)),
 		db
 			.select({
+				id: entityIdentityEvidenceRecords.id,
 				mentioned: entityIdentityEvidenceRecords.mentioned,
 				recommended: entityIdentityEvidenceRecords.recommended,
 				cited: entityIdentityEvidenceRecords.cited,
+				reviewState: entityIdentityEvidenceRecords.reviewState,
 			})
 			.from(entityIdentityEvidenceRecords)
 			.where(inArray(entityIdentityEvidenceRecords.providerRunId, runIds)),
@@ -71,6 +125,15 @@ async function readPersistedSummary(auditRunId: string): Promise<ReplayAuditSumm
 			.from(citationEvidenceRecords)
 			.where(inArray(citationEvidenceRecords.providerRunId, runIds)),
 	]);
+	const entityIds = entities.map((entity) => entity.id).filter((id): id is string => Boolean(id));
+	const citationClaimLinkCount = entityIds.length
+		? (
+				await db
+					.select({ id: citationClaimEvidenceLinks.id })
+					.from(citationClaimEvidenceLinks)
+					.where(inArray(citationClaimEvidenceLinks.entityEvidenceId, entityIds))
+			).length
+		: 0;
 
 	const citationTypes: Record<CitationType, number> = {
 		first_party: 0,
@@ -87,13 +150,106 @@ async function readPersistedSummary(auditRunId: string): Promise<ReplayAuditSumm
 		providerRunCount: runs.length,
 		entityEvidenceCount: entities.length,
 		citationEvidenceCount: citations.length,
+		citationClaimLinkCount,
 		retrievedRuns: runs.filter((run) => run.retrievalStatus === "retrieved").length,
 		mentionedEntities: entities.filter((entity) => entity.mentioned).length,
 		recommendedEntities: entities.filter((entity) => entity.recommended).length,
 		citedEntities: entities.filter((entity) => entity.cited).length,
+		pendingReviewEntities: entities.filter((entity) => entity.reviewState === "pending").length,
 		citationTypes,
 		completedAt: auditRun.completedAt.toISOString(),
 	};
+}
+
+async function readPersistedEvidence(auditRunId: string): Promise<ReplayEvidenceView | null> {
+	const summary = await readPersistedSummary(auditRunId);
+	if (!summary) return null;
+	const runs = await db
+		.select({
+			id: providerRuns.id,
+			correlationId: providerRuns.correlationId,
+			extractorId: providerRuns.extractorId,
+			extractorVersion: providerRuns.extractorVersion,
+			promptText: frozenPromptVariants.promptText,
+		})
+		.from(providerRuns)
+		.innerJoin(frozenPromptVariants, eq(providerRuns.promptVariantId, frozenPromptVariants.id))
+		.where(eq(providerRuns.auditRunId, auditRunId));
+	const runIds = runs.map((run) => run.id);
+	if (runIds.length === 0) return { summary, scenarios: [] };
+	const [payloads, entities, citations] = await Promise.all([
+		db.select().from(providerResponsePayloads).where(inArray(providerResponsePayloads.providerRunId, runIds)),
+		db.select().from(entityIdentityEvidenceRecords).where(inArray(entityIdentityEvidenceRecords.providerRunId, runIds)),
+		db.select().from(citationEvidenceRecords).where(inArray(citationEvidenceRecords.providerRunId, runIds)),
+	]);
+	const citationIds = citations.map((citation) => citation.id);
+	const links = citationIds.length
+		? await db
+				.select()
+				.from(citationClaimEvidenceLinks)
+				.where(inArray(citationClaimEvidenceLinks.citationEvidenceId, citationIds))
+		: [];
+	const entitiesById = new Map(entities.map((entity) => [entity.id, entity]));
+	const scenarios = runs
+		.map((run) => {
+			const payload = payloads.find((candidate) => candidate.providerRunId === run.id);
+			if (!payload) return null;
+			const rawPayload = payload.rawPayload as { retrieved: boolean; responseText: string };
+			const runEntities = entities.filter((entity) => entity.providerRunId === run.id);
+			return {
+				fixtureId: payload.fixtureId,
+				promptText: run.promptText,
+				rawResponse: rawPayload.responseText,
+				providerRetrieved: rawPayload.retrieved,
+				correlationId: run.correlationId,
+				extractorId: run.extractorId,
+				extractorVersion: run.extractorVersion,
+				entities: runEntities.map((entity) => {
+					const identity = entity.identitySnapshot as { name?: unknown };
+					return {
+						id: entity.id,
+						name: typeof identity.name === "string" ? identity.name : entity.entityId,
+						role: entity.entityRole,
+						retrieved: entity.retrieved,
+						mentioned: entity.mentioned,
+						recommended: entity.recommended,
+						prominenceRank: entity.prominenceRank,
+						cited: entity.cited,
+						reviewState: entity.reviewState,
+						trace: entity.classificationEvidence as EntityClassificationTrace,
+					};
+				}),
+				citations: citations
+					.filter((citation) => citation.providerRunId === run.id)
+					.map((citation) => ({
+						id: citation.id,
+						type: citation.citationType,
+						url: citation.originalUrl,
+						title: citation.title,
+						links: links
+							.filter((link) => link.citationEvidenceId === citation.id)
+							.map((link) => {
+								const linkedEntity = entitiesById.get(link.entityEvidenceId);
+								const identity = linkedEntity?.identitySnapshot as { name?: unknown } | undefined;
+								return {
+									entityEvidenceId: link.entityEvidenceId,
+									entityName:
+										typeof identity?.name === "string" ? identity.name : (linkedEntity?.entityId ?? "Unknown entity"),
+									claim: link.claim,
+									status: link.status,
+									rule: link.reasonCodes[0] ?? "citation_claim_link",
+									classifierVersion: link.classifierVersion,
+									excerpt: link.sourceExcerpt,
+									start: link.excerptStart,
+									end: link.excerptEnd,
+								};
+							}),
+					})),
+			};
+		})
+		.filter((scenario): scenario is NonNullable<typeof scenario> => Boolean(scenario))
+		.sort((left, right) => left.fixtureId.localeCompare(right.fixtureId));
+	return { summary, scenarios };
 }
 
 export const getLatestReplayBaselineFn = createServerFn({ method: "GET" })
@@ -111,6 +267,7 @@ export const getLatestReplayBaselineFn = createServerFn({ method: "GET" })
 					eq(auditRuns.brandId, data.brandId),
 					eq(auditRuns.runKind, "baseline"),
 					eq(auditRuns.executionMode, "fixture_replay"),
+					eq(auditRuns.schemaVersion, AUDIT_RECORD_SCHEMA_VERSION),
 				),
 			)
 			.orderBy(desc(auditRuns.completedAt))
@@ -119,9 +276,31 @@ export const getLatestReplayBaselineFn = createServerFn({ method: "GET" })
 		return latest ? readPersistedSummary(latest.id) : null;
 	});
 
+export const getLatestReplayEvidenceFn = createServerFn({ method: "GET" })
+	.validator(brandInputSchema)
+	.handler(async ({ data }): Promise<ReplayEvidenceView | null> => {
+		requireLocalReplayMode();
+		const session = await requireAuthSession();
+		await requireOrgAccess(session.user.id, data.brandId);
+		const [latest] = await db
+			.select({ id: auditRuns.id })
+			.from(auditRuns)
+			.where(
+				and(
+					eq(auditRuns.brandId, data.brandId),
+					eq(auditRuns.runKind, "baseline"),
+					eq(auditRuns.executionMode, "fixture_replay"),
+					eq(auditRuns.schemaVersion, AUDIT_RECORD_SCHEMA_VERSION),
+				),
+			)
+			.orderBy(desc(auditRuns.completedAt))
+			.limit(1);
+		return latest ? readPersistedEvidence(latest.id) : null;
+	});
+
 export const runReplayBaselineFn = createServerFn({ method: "POST" })
 	.validator(brandInputSchema)
-	.handler(async ({ data }): Promise<ReplayAuditSummary> => {
+	.handler(async ({ data }): Promise<ReplayEvidenceView> => {
 		requireLocalReplayMode();
 		const session = await requireAuthSession();
 		await requireOrgAccess(session.user.id, data.brandId);
@@ -155,7 +334,7 @@ export const runReplayBaselineFn = createServerFn({ method: "POST" })
 		});
 
 		await persistReplayAuditBundle(bundle);
-		const persisted = await readPersistedSummary(bundle.auditRun.id);
+		const persisted = await readPersistedEvidence(bundle.auditRun.id);
 		if (!persisted) throw new Error("Replay baseline was not persisted");
 		return persisted;
 	});

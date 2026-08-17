@@ -85,6 +85,13 @@
       "when": 1786977020475,
       "tag": "0011_immutable_replay_evidence",
       "breakpoints": true
+    },
+    {
+      "idx": 12,
+      "version": "7",
+      "when": 1786979502555,
+      "tag": "0012_evidence_classification_trace",
+      "breakpoints": true
     }
   ]
 }

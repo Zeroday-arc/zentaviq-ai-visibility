@@ -45,18 +45,28 @@ function entityForFixture(
 	return evidence;
 }
 
+function entitiesForFixture(
+	bundle: ReturnType<typeof createReplayAuditBundle>,
+	fixtureId: string,
+): EntityIdentityEvidenceRecord[] {
+	const payload = bundle.responsePayloads.find((candidate) => candidate.fixtureId === fixtureId);
+	if (!payload) throw new Error(`Missing payload for ${fixtureId}`);
+	return bundle.entityEvidence.filter((candidate) => candidate.responsePayloadId === payload.id);
+}
+
 describe("fixture replay audit", () => {
-	it("covers the four deterministic v0.1 evidence scenarios", () => {
+	it("retains the original foundation scenarios in the expanded fixture set", () => {
 		const bundle = createReplayAuditBundle(input);
 
-		expect(bundle.intentFamilies).toHaveLength(4);
-		expect(bundle.promptVariants).toHaveLength(4);
-		expect(bundle.providerRuns).toHaveLength(4);
-		expect(bundle.responsePayloads).toHaveLength(4);
-		expect(bundle.entityEvidence).toHaveLength(8);
-		expect(bundle.citationEvidence).toHaveLength(3);
+		expect(bundle.intentFamilies).toHaveLength(12);
+		expect(bundle.promptVariants).toHaveLength(12);
+		expect(bundle.providerRuns).toHaveLength(12);
+		expect(bundle.responsePayloads).toHaveLength(12);
+		expect(bundle.entityEvidence).toHaveLength(26);
+		expect(bundle.citationEvidence).toHaveLength(5);
+		expect(bundle.citationClaimLinks).toHaveLength(6);
 
-		const strongBrand = entityForFixture(bundle, "strong-business-first-party-v1", "brand:brand-zentaviq");
+		const strongBrand = entityForFixture(bundle, "strong-business-first-party-v2", "brand:brand-zentaviq");
 		expect(strongBrand).toMatchObject({
 			retrieved: true,
 			mentioned: true,
@@ -72,7 +82,7 @@ describe("fixture replay audit", () => {
 
 		const competitor = entityForFixture(
 			bundle,
-			"competitor-recommendation-citation-v1",
+			"competitor-recommendation-citation-v2",
 			"competitor:00000000-0000-4000-8000-000000000001",
 		);
 		expect(competitor).toMatchObject({
@@ -84,10 +94,10 @@ describe("fixture replay audit", () => {
 
 		for (const evidence of bundle.entityEvidence.filter((candidate) => {
 			const payload = bundle.responsePayloads.find((response) => response.id === candidate.responsePayloadId);
-			return payload?.fixtureId === "broad-category-ambiguity-v1";
+			return payload?.fixtureId === "broad-category-ambiguity-v2" && candidate.entityRole !== "unknown";
 		})) {
 			expect(evidence).toMatchObject({
-				retrieved: true,
+				retrieved: false,
 				mentioned: false,
 				recommended: false,
 				cited: false,
@@ -96,7 +106,7 @@ describe("fixture replay audit", () => {
 
 		for (const evidence of bundle.entityEvidence.filter((candidate) => {
 			const payload = bundle.responsePayloads.find((response) => response.id === candidate.responsePayloadId);
-			return payload?.fixtureId === "no-retrieval-no-mention-v1";
+			return payload?.fixtureId === "no-retrieval-no-mention-v2";
 		})) {
 			expect(evidence).toMatchObject({
 				retrieved: false,
@@ -107,11 +117,115 @@ describe("fixture replay audit", () => {
 		}
 	});
 
+	it("classifies the eight milestone scenarios with explicit review states", () => {
+		const bundle = createReplayAuditBundle(input);
+		const targetId = "brand:brand-zentaviq";
+		const competitorId = "competitor:00000000-0000-4000-8000-000000000001";
+
+		const mentionOnly = entityForFixture(bundle, "mention-without-recommendation-v2", targetId);
+		expect(mentionOnly).toMatchObject({ retrieved: true, mentioned: true, recommended: false, cited: false });
+		expect(mentionOnly.classificationEvidence.decisions.recommended.status).toBe("not_detected");
+
+		const lowProminence = entityForFixture(bundle, "recommendation-low-prominence-v2", targetId);
+		expect(lowProminence).toMatchObject({ retrieved: true, mentioned: true, recommended: true, prominenceRank: 3 });
+		expect(lowProminence.classificationEvidence.decisions.prominence).toMatchObject({
+			status: "accepted",
+			value: 3,
+		});
+
+		const rankedTarget = entityForFixture(bundle, "competitor-ranked-above-target-v2", targetId);
+		const rankedCompetitor = entityForFixture(bundle, "competitor-ranked-above-target-v2", competitorId);
+		expect(rankedCompetitor).toMatchObject({ prominenceRank: 1, recommended: true });
+		expect(rankedTarget).toMatchObject({ prominenceRank: 2, recommended: false });
+
+		for (const collision of entitiesForFixture(bundle, "alias-name-collision-v2")) {
+			expect(collision).toMatchObject({
+				retrieved: false,
+				mentioned: false,
+				recommended: false,
+				reviewState: "pending",
+			});
+			expect(collision.classificationEvidence.decisions.mentioned.status).toBe("ambiguous");
+			expect(collision.classificationEvidence.decisions.recommended.status).toBe("ambiguous");
+			expect(collision.classificationEvidence.sources).toEqual(
+				expect.arrayContaining([
+					expect.objectContaining({
+						disposition: "ambiguous",
+						matchedAlias: "Visibility Core",
+						reasonCodes: ["identity_collision"],
+					}),
+				]),
+			);
+		}
+
+		const domainCitation = entityForFixture(bundle, "target-domain-citation-without-recommendation-v2", targetId);
+		expect(domainCitation).toMatchObject({ retrieved: true, mentioned: false, recommended: false, cited: true });
+
+		const unrelatedEntities = entitiesForFixture(bundle, "unrelated-citation-near-target-mention-v2");
+		const unrelatedTarget = unrelatedEntities.find((entity) => entity.entityId === targetId);
+		const unknown = unrelatedEntities.find((entity) => entity.entityRole === "unknown");
+		expect(unrelatedTarget).toMatchObject({ mentioned: true, cited: false });
+		expect(unrelatedTarget?.classificationEvidence.decisions.cited.status).toBe("rejected");
+		expect(unknown).toMatchObject({ entityRole: "unknown", retrieved: true, cited: true });
+		expect(unknown?.classificationEvidence.entityType).toBe("unrelated_unknown");
+
+		const ambiguous = entityForFixture(bundle, "ambiguous-category-human-review-v2", targetId);
+		expect(ambiguous).toMatchObject({ retrieved: false, mentioned: false, reviewState: "pending" });
+		expect(ambiguous.classificationEvidence.decisions.retrieved.status).toBe("ambiguous");
+		expect(ambiguous.classificationEvidence.decisions.mentioned.status).toBe("ambiguous");
+
+		const absentTarget = entityForFixture(bundle, "no-target-retrieval-v2", targetId);
+		const retrievedCompetitor = entityForFixture(bundle, "no-target-retrieval-v2", competitorId);
+		expect(absentTarget).toMatchObject({ retrieved: false, mentioned: false, recommended: false, cited: false });
+		expect(absentTarget.classificationEvidence.decisions.retrieved.status).toBe("not_detected");
+		expect(retrievedCompetitor.retrieved).toBe(true);
+	});
+
+	it("preserves exact source excerpts, offsets, rules, confidence and source IDs", () => {
+		const bundle = createReplayAuditBundle(input);
+		for (const entity of bundle.entityEvidence) {
+			const payload = bundle.responsePayloads.find((candidate) => candidate.id === entity.responsePayloadId);
+			if (!payload) throw new Error(`Missing payload for ${entity.id}`);
+			expect(entity.identitySnapshot).toEqual(entity.matchEvidence.identity);
+			const sourceIds = new Set(entity.classificationEvidence.sources.map((source) => source.id));
+			for (const source of entity.classificationEvidence.sources) {
+				expect(payload.rawPayload.responseText.slice(source.start, source.end)).toBe(source.excerpt);
+				expect(source.matchRule).not.toBe("");
+				expect(source.classifierVersion).not.toBe("");
+				expect(source.confidence).toBeGreaterThanOrEqual(0);
+				expect(source.confidence).toBeLessThanOrEqual(1);
+			}
+			for (const classification of Object.values(entity.classificationEvidence.decisions)) {
+				for (const sourceId of classification.sourceEvidenceIds) expect(sourceIds.has(sourceId)).toBe(true);
+			}
+		}
+	});
+
+	it("links a citation only to the entity and claim its deterministic evidence supports", () => {
+		const bundle = createReplayAuditBundle(input);
+		const targetId = "brand:brand-zentaviq";
+		const domainTarget = entityForFixture(bundle, "target-domain-citation-without-recommendation-v2", targetId);
+		expect(bundle.citationClaimLinks.find((link) => link.entityEvidenceId === domainTarget.id)).toMatchObject({
+			claim: "identity",
+			status: "accepted",
+		});
+
+		const unrelatedTarget = entityForFixture(bundle, "unrelated-citation-near-target-mention-v2", targetId);
+		expect(bundle.citationClaimLinks.find((link) => link.entityEvidenceId === unrelatedTarget.id)).toMatchObject({
+			claim: "mention",
+			status: "rejected",
+			reasonCodes: ["citation_domain_not_owned_by_entity", "proximity_does_not_establish_support"],
+		});
+		expect(unrelatedTarget.cited).toBe(false);
+	});
+
 	it("classifies first-party, competitor, and independent citations without fetching them", () => {
 		const bundle = createReplayAuditBundle(input);
 		expect(bundle.citationEvidence.map((citation) => citation.citationType)).toEqual([
 			"first_party",
 			"competitor",
+			"independent",
+			"first_party",
 			"independent",
 		]);
 		expect(
@@ -139,9 +253,10 @@ describe("fixture replay audit", () => {
 			expect(payload.replayedAt).toEqual(input.replayedAt);
 		}
 		expect(bundle.providerRuns.every((run) => run.correlationId.startsWith(input.correlationId))).toBe(true);
-		expect(bundle.providerRuns.every((run) => run.extractorVersion === "1.0.0")).toBe(true);
-		expect(bundle.entityEvidence.every((record) => record.schemaVersion === 1)).toBe(true);
-		expect(bundle.citationEvidence.every((record) => record.schemaVersion === 1)).toBe(true);
+		expect(bundle.providerRuns.every((run) => run.extractorVersion === "2.0.0")).toBe(true);
+		expect(bundle.entityEvidence.every((record) => record.schemaVersion === 2)).toBe(true);
+		expect(bundle.citationEvidence.every((record) => record.schemaVersion === 2)).toBe(true);
+		expect(bundle.citationClaimLinks.every((record) => record.schemaVersion === 2)).toBe(true);
 	});
 
 	it("is byte-for-byte deterministic for the same replay input", () => {
@@ -178,10 +293,11 @@ describe("fixture replay audit", () => {
 
 		const snapshot = store.snapshot();
 		expect(snapshot.auditRuns).toHaveLength(1);
-		expect(snapshot.providerRuns).toHaveLength(4);
-		expect(snapshot.responsePayloads).toHaveLength(4);
-		expect(snapshot.entityEvidence).toHaveLength(8);
-		expect(snapshot.citationEvidence).toHaveLength(3);
+		expect(snapshot.providerRuns).toHaveLength(12);
+		expect(snapshot.responsePayloads).toHaveLength(12);
+		expect(snapshot.entityEvidence).toHaveLength(26);
+		expect(snapshot.citationEvidence).toHaveLength(5);
+		expect(snapshot.citationClaimLinks).toHaveLength(6);
 
 		const conflicting = structuredClone(bundle);
 		conflicting.responsePayloads[0].rawPayload.responseText = "Mutated after persistence";

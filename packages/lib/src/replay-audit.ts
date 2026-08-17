@@ -10,16 +10,38 @@ import {
 	type EntityClassification,
 	type EntityIdentityInput,
 } from "./evidence";
+import {
+	diagnoseReplayEvidence,
+	type DiagnosisFindingRecord,
+	type DiagnosisResult,
+	type RemediationRecord,
+} from "./diagnosis";
+
+export {
+	DIAGNOSIS_CLASSIFIER_ID,
+	DIAGNOSIS_CLASSIFIER_VERSION,
+	DIAGNOSIS_RECORD_SCHEMA_VERSION,
+	MINIMUM_REPEATED_EVIDENCE_RUNS,
+	REMEDIATION_POLICY_VERSION,
+} from "./diagnosis";
+export type {
+	CompetitorCitationGapWinner,
+	DiagnosisEvidenceSummary,
+	DiagnosisFindingRecord,
+	LikelyFailureStage,
+	RemediationActionCategory,
+	RemediationRecord,
+} from "./diagnosis";
 
 export const AUDIT_RECORD_SCHEMA_VERSION = 2 as const;
-export const REPLAY_FIXTURE_SCHEMA_VERSION = 2 as const;
+export const REPLAY_FIXTURE_SCHEMA_VERSION = 3 as const;
 export const REPLAY_EXTRACTOR_ID = "zentaviq-fixture-replay-extractor";
 export const REPLAY_EXTRACTOR_VERSION = "2.0.0";
 export const EVIDENCE_CLASSIFIER_ID = "zentaviq-deterministic-evidence-classifier";
 export const EVIDENCE_CLASSIFIER_VERSION = "2.0.0";
 export const REPLAY_PROVIDER_ID = "fixture-replay";
 export const REPLAY_MODEL_ID = "zentaviq-replay";
-export const REPLAY_MODEL_VERSION = "v0.1-evidence-classification";
+export const REPLAY_MODEL_VERSION = "v0.1-failure-diagnosis";
 export const HUMAN_REVIEW_CONFIDENCE_THRESHOLD = 0.75;
 
 export type AuditRunKind = "baseline" | "audit";
@@ -37,6 +59,13 @@ const fixtureCitationSchema = z
 	.object({
 		url: z.string(),
 		title: z.string().min(1).optional(),
+		supports: z
+			.object({
+				entityRole: z.enum(["brand", "competitor"]),
+				claim: z.enum(["identity", "mention", "recommendation"]),
+			})
+			.strict()
+			.optional(),
 	})
 	.strict();
 
@@ -326,6 +355,8 @@ export interface ReplayAuditBundle {
 	citationEvidence: CitationEvidenceRecord[];
 	entityEvidence: EntityIdentityEvidenceRecord[];
 	citationClaimLinks: CitationClaimEvidenceLinkRecord[];
+	findings: DiagnosisFindingRecord[];
+	remediations: RemediationRecord[];
 }
 
 export interface ReplayAuditSummary {
@@ -341,6 +372,10 @@ export interface ReplayAuditSummary {
 	recommendedEntities: number;
 	citedEntities: number;
 	pendingReviewEntities: number;
+	diagnosisFindingCount: number;
+	remediationCount: number;
+	maintainDecisionCount: number;
+	diagnosisReviewCount: number;
 	citationTypes: Record<CitationType, number>;
 	completedAt: string;
 }
@@ -494,24 +529,24 @@ export function createReplayFixtures(input: Pick<ReplayAuditInput, "brand" | "co
 			intent: {
 				key: "broad-category-discovery",
 				version: 1,
-				name: "Broad category discovery",
-				description: "A retrieved category answer that does not identify a tracked entity.",
+				name: "Portable workstation category ambiguity",
+				description: "A broad portable-workstation answer that does not resolve a tracked entity.",
 			},
 			prompt: {
 				version: 1,
-				text: "What should teams consider when evaluating broad AI visibility categories?",
+				text: "What is the best portable workstation for a field research team?",
 			},
 			provider,
-			classificationContext: baseContext,
+			classificationContext: { categoryTerms: ["portable workstation", "portable workstations"] },
 			payload: {
 				schemaVersion: REPLAY_FIXTURE_SCHEMA_VERSION,
 				retrieved: true,
 				responseText:
-					"The category is broad: teams should compare evidence quality, model coverage, and repeatability before selecting a product. Source: https://industry.example/ai-visibility-landscape.",
+					"Portable workstation can mean a rugged laptop, compact desktop, or mobile lab. Clarify workload and travel constraints before selecting a product. Source: https://industry.example/portable-workstations.",
 				citations: [
 					{
-						url: "https://industry.example/ai-visibility-landscape",
-						title: "AI visibility landscape",
+						url: "https://industry.example/portable-workstations",
+						title: "Portable workstation landscape",
 					},
 				],
 			},
@@ -595,7 +630,7 @@ export function createReplayFixtures(input: Pick<ReplayAuditInput, "brand" | "co
 			payload: {
 				schemaVersion: REPLAY_FIXTURE_SCHEMA_VERSION,
 				retrieved: true,
-				responseText: `1. I recommend ${competitor.name} for workflow depth.\n2. ${input.brand.name} is another credible option.`,
+				responseText: `1. I recommend ${competitor.name} for workflow depth.\n2. I recommend ${input.brand.name} as another credible option.`,
 				citations: [],
 			},
 		},
@@ -700,13 +735,138 @@ export function createReplayFixtures(input: Pick<ReplayAuditInput, "brand" | "co
 				citations: [],
 			},
 		},
+		{
+			fixtureId: "target-recommended-without-citation-v3",
+			fixtureVersion: REPLAY_FIXTURE_SCHEMA_VERSION,
+			capturedAt: "2026-08-01T00:12:00.000Z",
+			intent: {
+				key: "target-recommended-without-citation",
+				version: 1,
+				name: "Target recommendation without support",
+				description: "A top-ranked target recommendation with no citation-to-claim support.",
+			},
+			prompt: { version: 1, text: "Which evidence platform is the best fit for a focused audit team?" },
+			provider,
+			classificationContext: baseContext,
+			payload: {
+				schemaVersion: REPLAY_FIXTURE_SCHEMA_VERSION,
+				retrieved: true,
+				responseText: `1. I recommend ${input.brand.name} for a focused audit team.`,
+				citations: [],
+			},
+		},
+		{
+			fixtureId: "competitor-independent-support-a-v3",
+			fixtureVersion: REPLAY_FIXTURE_SCHEMA_VERSION,
+			capturedAt: "2026-08-01T00:13:00.000Z",
+			intent: {
+				key: "repeated-competitor-independent-support",
+				version: 4,
+				name: "Repeated competitor independent support",
+				description: "A losing intent where independent evidence explicitly supports the competitor.",
+			},
+			prompt: { version: 4, text: "Which workflow platform has independently supported operational depth?" },
+			provider,
+			classificationContext: baseContext,
+			payload: {
+				schemaVersion: REPLAY_FIXTURE_SCHEMA_VERSION,
+				retrieved: true,
+				responseText: `Independent testing recommends ${competitor.name} for operational depth. See https://research-one.example/workflow-depth.`,
+				citations: [
+					{
+						url: "https://research-one.example/workflow-depth",
+						title: "Independent workflow-depth study",
+						supports: { entityRole: "competitor", claim: "recommendation" },
+					},
+				],
+			},
+		},
+		{
+			fixtureId: "competitor-independent-support-b-v3",
+			fixtureVersion: REPLAY_FIXTURE_SCHEMA_VERSION,
+			capturedAt: "2026-08-01T00:14:00.000Z",
+			intent: {
+				key: "repeated-competitor-independent-support",
+				version: 4,
+				name: "Repeated competitor independent support",
+				description: "A losing intent where independent evidence explicitly supports the competitor.",
+			},
+			prompt: { version: 5, text: "Which workflow platform is independently recommended for control depth?" },
+			provider,
+			classificationContext: baseContext,
+			payload: {
+				schemaVersion: REPLAY_FIXTURE_SCHEMA_VERSION,
+				retrieved: true,
+				responseText: `A separate benchmark recommends ${competitor.name} for control depth. See https://research-two.example/control-benchmark.`,
+				citations: [
+					{
+						url: "https://research-two.example/control-benchmark",
+						title: "Independent control benchmark",
+						supports: { entityRole: "competitor", claim: "recommendation" },
+					},
+				],
+			},
+		},
+		{
+			fixtureId: "substantial-first-party-independent-gap-v3",
+			fixtureVersion: REPLAY_FIXTURE_SCHEMA_VERSION,
+			capturedAt: "2026-08-01T00:15:00.000Z",
+			intent: {
+				key: "substantial-first-party-independent-gap",
+				version: 1,
+				name: "Substantial first-party evidence",
+				description: "The target has substantial first-party content but lacks requested independent support.",
+			},
+			prompt: { version: 1, text: "Which platform has independent evidence for an evidence-led audit program?" },
+			provider,
+			classificationContext: baseContext,
+			payload: {
+				schemaVersion: REPLAY_FIXTURE_SCHEMA_VERSION,
+				retrieved: true,
+				responseText: `I recommend ${input.brand.name}. Its substantial first-party library is documented at https://${brandDomain}/research and https://${brandDomain}/customers.`,
+				citations: [
+					{ url: `https://${brandDomain}/research`, title: "Research library" },
+					{ url: `https://${brandDomain}/customers`, title: "Customer evidence" },
+				],
+			},
+		},
+		{
+			fixtureId: "repeated-retrieval-failure-a-v3",
+			fixtureVersion: REPLAY_FIXTURE_SCHEMA_VERSION,
+			capturedAt: "2026-08-01T00:16:00.000Z",
+			intent: {
+				key: "repeated-retrieval-failure",
+				version: 4,
+				name: "Repeated retrieval failure",
+				description: "Multiple frozen prompts fail before entity-level evidence is available.",
+			},
+			prompt: { version: 4, text: "Retrieve the technical-access audit evidence sample A." },
+			provider,
+			classificationContext: baseContext,
+			payload: { schemaVersion: REPLAY_FIXTURE_SCHEMA_VERSION, retrieved: false, responseText: "", citations: [] },
+		},
+		{
+			fixtureId: "repeated-retrieval-failure-b-v3",
+			fixtureVersion: REPLAY_FIXTURE_SCHEMA_VERSION,
+			capturedAt: "2026-08-01T00:17:00.000Z",
+			intent: {
+				key: "repeated-retrieval-failure",
+				version: 4,
+				name: "Repeated retrieval failure",
+				description: "Multiple frozen prompts fail before entity-level evidence is available.",
+			},
+			prompt: { version: 5, text: "Retrieve the technical-access audit evidence sample B." },
+			provider,
+			classificationContext: baseContext,
+			payload: { schemaVersion: REPLAY_FIXTURE_SCHEMA_VERSION, retrieved: false, responseText: "", citations: [] },
+		},
 	];
 
 	return fixtures.map((fixture) =>
 		replayFixtureSchema.parse({
 			...fixture,
-			intent: { ...fixture.intent, version: 2 },
-			prompt: { ...fixture.prompt, version: 2 },
+			intent: { ...fixture.intent, version: fixture.intent.version === 1 ? 3 : fixture.intent.version },
+			prompt: { ...fixture.prompt, version: fixture.prompt.version === 1 ? 3 : fixture.prompt.version },
 		}),
 	);
 }
@@ -1326,6 +1486,8 @@ export function createReplayAuditBundle(input: ReplayAuditInput): ReplayAuditBun
 		citationEvidence: [],
 		entityEvidence: [],
 		citationClaimLinks: [],
+		findings: [],
+		remediations: [],
 	};
 
 	for (const fixture of fixtures) {
@@ -1341,7 +1503,7 @@ export function createReplayAuditBundle(input: ReplayAuditInput): ReplayAuditBun
 		const fixtureChecksum = sha256(fixture);
 		const payloadChecksum = sha256(fixture.payload);
 
-		bundle.intentFamilies.push({
+		const intentFamilyRecord: IntentFamilyRecord = {
 			id: intentFamilyId,
 			brandId: input.brand.id,
 			key: fixture.intent.key,
@@ -1350,8 +1512,11 @@ export function createReplayAuditBundle(input: ReplayAuditInput): ReplayAuditBun
 			schemaVersion: AUDIT_RECORD_SCHEMA_VERSION,
 			version: fixture.intent.version,
 			createdAt: new Date(fixture.capturedAt),
-		});
-		bundle.promptVariants.push({
+		};
+		if (!bundle.intentFamilies.some((intent) => intent.id === intentFamilyId)) {
+			bundle.intentFamilies.push(intentFamilyRecord);
+		}
+		const promptVariantRecord: FrozenPromptVariantRecord = {
 			id: promptVariantId,
 			intentFamilyId,
 			sourcePromptId: null,
@@ -1361,7 +1526,10 @@ export function createReplayAuditBundle(input: ReplayAuditInput): ReplayAuditBun
 			version: fixture.prompt.version,
 			frozenAt: new Date(fixture.capturedAt),
 			createdAt: new Date(fixture.capturedAt),
-		});
+		};
+		if (!bundle.promptVariants.some((prompt) => prompt.id === promptVariantId)) {
+			bundle.promptVariants.push(promptVariantRecord);
+		}
 		bundle.providerRuns.push({
 			id: providerRunId,
 			auditRunId,
@@ -1459,6 +1627,7 @@ export function createReplayAuditBundle(input: ReplayAuditInput): ReplayAuditBun
 
 		const fixtureLinks: CitationClaimEvidenceLinkRecord[] = [];
 		for (const citation of citationRows) {
+			const fixtureCitation = fixture.payload.citations[citation.citationIndex];
 			const trackedOwners = entityRows.filter(
 				(entity) =>
 					entity.entityRole !== "unknown" &&
@@ -1490,6 +1659,26 @@ export function createReplayAuditBundle(input: ReplayAuditInput): ReplayAuditBun
 					}),
 				);
 			}
+			if (fixtureCitation?.supports) {
+				const supportedEntities = entityRows.filter(
+					(entity) => entity.entityRole === fixtureCitation.supports?.entityRole,
+				);
+				for (const supportedEntity of supportedEntities) {
+					fixtureLinks.push(
+						createCitationClaimLink({
+							providerCorrelationId,
+							citation,
+							entity: supportedEntity,
+							claim: fixtureCitation.supports.claim,
+							status: "accepted",
+							reasonCodes: ["structured_fixture_citation_support", "explicit_entity_claim_relationship"],
+							confidence: 0.99,
+							content: fixture.payload.responseText,
+							createdAt: replayedAt,
+						}),
+					);
+				}
+			}
 			if (trackedOwners.length === 0) {
 				for (const mentionedEntity of entityRows.filter(
 					(entity) =>
@@ -1518,6 +1707,10 @@ export function createReplayAuditBundle(input: ReplayAuditInput): ReplayAuditBun
 		}
 	}
 
+	const diagnosis: DiagnosisResult = diagnoseReplayEvidence(bundle);
+	bundle.findings = diagnosis.findings;
+	bundle.remediations = diagnosis.remediations;
+
 	return bundle;
 }
 
@@ -1542,6 +1735,10 @@ export function summarizeReplayAudit(bundle: ReplayAuditBundle): ReplayAuditSumm
 		recommendedEntities: bundle.entityEvidence.filter((evidence) => evidence.recommended).length,
 		citedEntities: bundle.entityEvidence.filter((evidence) => evidence.cited).length,
 		pendingReviewEntities: bundle.entityEvidence.filter((evidence) => evidence.reviewState === "pending").length,
+		diagnosisFindingCount: bundle.findings.length,
+		remediationCount: bundle.remediations.length,
+		maintainDecisionCount: bundle.findings.filter((finding) => finding.likelyFailureStage === "maintain").length,
+		diagnosisReviewCount: bundle.findings.filter((finding) => finding.reviewState === "pending").length,
 		citationTypes,
 		completedAt: bundle.auditRun.completedAt.toISOString(),
 	};

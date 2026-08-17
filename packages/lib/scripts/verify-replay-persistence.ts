@@ -4,7 +4,9 @@ import {
 	auditRuns,
 	citationClaimEvidenceLinks,
 	citationEvidenceRecords,
+	diagnosisFindings,
 	entityIdentityEvidenceRecords,
+	evidenceRemediations,
 	providerResponsePayloads,
 	providerRuns,
 } from "../src/db/schema";
@@ -85,6 +87,10 @@ async function main(): Promise<void> {
 		})
 		.from(citationClaimEvidenceLinks)
 		.where(inArray(citationClaimEvidenceLinks.entityEvidenceId, entityIds));
+	const [findings, remediations] = await Promise.all([
+		db.select().from(diagnosisFindings).where(eq(diagnosisFindings.auditRunId, latest.id)),
+		db.select().from(evidenceRemediations).where(eq(evidenceRemediations.auditRunId, latest.id)),
+	]);
 
 	let immutableUpdateRejected = false;
 	try {
@@ -107,6 +113,32 @@ async function main(): Promise<void> {
 		if (!immutableClaimLinkUpdateRejected) throw error;
 	}
 	if (!immutableClaimLinkUpdateRejected) throw new Error("Immutable citation claim link update was not rejected");
+	let immutableFindingUpdateRejected = false;
+	const firstFinding = findings[0];
+	if (!firstFinding) throw new Error("No diagnosis finding was persisted");
+	try {
+		await db
+			.update(diagnosisFindings)
+			.set({ correlationId: firstFinding.correlationId })
+			.where(eq(diagnosisFindings.id, firstFinding.id));
+	} catch (error) {
+		immutableFindingUpdateRejected = isImmutableUpdateError(error);
+		if (!immutableFindingUpdateRejected) throw error;
+	}
+	if (!immutableFindingUpdateRejected) throw new Error("Immutable diagnosis finding update was not rejected");
+	let immutableRemediationUpdateRejected = false;
+	const firstRemediation = remediations[0];
+	if (!firstRemediation) throw new Error("No evidence remediation was persisted");
+	try {
+		await db
+			.update(evidenceRemediations)
+			.set({ correlationId: firstRemediation.correlationId })
+			.where(eq(evidenceRemediations.id, firstRemediation.id));
+	} catch (error) {
+		immutableRemediationUpdateRejected = isImmutableUpdateError(error);
+		if (!immutableRemediationUpdateRejected) throw error;
+	}
+	if (!immutableRemediationUpdateRejected) throw new Error("Immutable remediation update was not rejected");
 
 	const citationTypes = citations.reduce<Record<string, number>>((counts, citation) => {
 		counts[citation.citationType] = (counts[citation.citationType] ?? 0) + 1;
@@ -126,22 +158,39 @@ async function main(): Promise<void> {
 		classificationTraces: entities.filter(
 			(entity) => Object.keys(entity.classificationEvidence as Record<string, unknown>).length > 0,
 		).length,
+		diagnosisFindings: findings.length,
+		remediations: remediations.length,
+		maintainDecisions: findings.filter((finding) => finding.likelyFailureStage === "maintain").length,
+		diagnosisReviewRequired: findings.filter((finding) => finding.reviewState === "pending").length,
+		insufficientEvidenceFindings: findings.filter((finding) => finding.likelyFailureStage === "insufficient_evidence").length,
+		repeatedCompetitorAuthorityFindings: findings.filter((finding) => {
+			const evidence = finding.diagnosisEvidence as { competitorCitationGap?: { repeatedSupportingEvidence?: unknown } };
+			return evidence.competitorCitationGap?.repeatedSupportingEvidence === true;
+		}).length,
 		citationTypes,
 		fixtureSetChecksumLength: latest.fixtureSetChecksum.length,
 		immutableUpdateRejected,
 		immutableClaimLinkUpdateRejected,
+		immutableFindingUpdateRejected,
+		immutableRemediationUpdateRejected,
 	};
 	if (
-		verification.providerRuns !== 12 ||
-		verification.responsePayloads !== 12 ||
-		verification.entityEvidence !== 26 ||
-		verification.citationEvidence !== 5 ||
-		verification.citationClaimLinks !== 6 ||
-		verification.acceptedCitationClaimLinks !== 5 ||
-		verification.rejectedCitationClaimLinks !== 1 ||
-		verification.pendingReviewEntities !== 3 ||
-		verification.unknownEntities !== 2 ||
-		verification.classificationTraces !== 26 ||
+		verification.providerRuns !== 18 ||
+		verification.responsePayloads !== 18 ||
+		verification.entityEvidence !== 40 ||
+		verification.citationEvidence !== 9 ||
+		verification.citationClaimLinks !== 14 ||
+		verification.acceptedCitationClaimLinks !== 11 ||
+		verification.rejectedCitationClaimLinks !== 3 ||
+		verification.pendingReviewEntities !== 4 ||
+		verification.unknownEntities !== 4 ||
+		verification.classificationTraces !== 40 ||
+		verification.diagnosisFindings !== 16 ||
+		verification.remediations !== 15 ||
+		verification.maintainDecisions !== 1 ||
+		verification.diagnosisReviewRequired !== 2 ||
+		verification.insufficientEvidenceFindings !== 1 ||
+		verification.repeatedCompetitorAuthorityFindings !== 1 ||
 		verification.fixtureSetChecksumLength !== 64
 	) {
 		throw new Error(`Persisted replay evidence is incomplete: ${JSON.stringify(verification)}`);

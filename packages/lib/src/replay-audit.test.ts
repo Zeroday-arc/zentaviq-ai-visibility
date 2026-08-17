@@ -58,13 +58,15 @@ describe("fixture replay audit", () => {
 	it("retains the original foundation scenarios in the expanded fixture set", () => {
 		const bundle = createReplayAuditBundle(input);
 
-		expect(bundle.intentFamilies).toHaveLength(12);
-		expect(bundle.promptVariants).toHaveLength(12);
-		expect(bundle.providerRuns).toHaveLength(12);
-		expect(bundle.responsePayloads).toHaveLength(12);
-		expect(bundle.entityEvidence).toHaveLength(26);
-		expect(bundle.citationEvidence).toHaveLength(5);
-		expect(bundle.citationClaimLinks).toHaveLength(6);
+		expect(bundle.intentFamilies).toHaveLength(16);
+		expect(bundle.promptVariants).toHaveLength(18);
+		expect(bundle.providerRuns).toHaveLength(18);
+		expect(bundle.responsePayloads).toHaveLength(18);
+		expect(bundle.entityEvidence).toHaveLength(40);
+		expect(bundle.citationEvidence).toHaveLength(9);
+		expect(bundle.citationClaimLinks).toHaveLength(14);
+		expect(bundle.findings).toHaveLength(16);
+		expect(bundle.remediations).toHaveLength(15);
 
 		const strongBrand = entityForFixture(bundle, "strong-business-first-party-v2", "brand:brand-zentaviq");
 		expect(strongBrand).toMatchObject({
@@ -136,7 +138,7 @@ describe("fixture replay audit", () => {
 		const rankedTarget = entityForFixture(bundle, "competitor-ranked-above-target-v2", targetId);
 		const rankedCompetitor = entityForFixture(bundle, "competitor-ranked-above-target-v2", competitorId);
 		expect(rankedCompetitor).toMatchObject({ prominenceRank: 1, recommended: true });
-		expect(rankedTarget).toMatchObject({ prominenceRank: 2, recommended: false });
+		expect(rankedTarget).toMatchObject({ prominenceRank: 2, recommended: true });
 
 		for (const collision of entitiesForFixture(bundle, "alias-name-collision-v2")) {
 			expect(collision).toMatchObject({
@@ -227,6 +229,10 @@ describe("fixture replay audit", () => {
 			"independent",
 			"first_party",
 			"independent",
+			"independent",
+			"independent",
+			"first_party",
+			"first_party",
 		]);
 		expect(
 			bundle.citationEvidence.every(
@@ -293,11 +299,13 @@ describe("fixture replay audit", () => {
 
 		const snapshot = store.snapshot();
 		expect(snapshot.auditRuns).toHaveLength(1);
-		expect(snapshot.providerRuns).toHaveLength(12);
-		expect(snapshot.responsePayloads).toHaveLength(12);
-		expect(snapshot.entityEvidence).toHaveLength(26);
-		expect(snapshot.citationEvidence).toHaveLength(5);
-		expect(snapshot.citationClaimLinks).toHaveLength(6);
+		expect(snapshot.providerRuns).toHaveLength(18);
+		expect(snapshot.responsePayloads).toHaveLength(18);
+		expect(snapshot.entityEvidence).toHaveLength(40);
+		expect(snapshot.citationEvidence).toHaveLength(9);
+		expect(snapshot.citationClaimLinks).toHaveLength(14);
+		expect(snapshot.findings).toHaveLength(16);
+		expect(snapshot.remediations).toHaveLength(15);
 
 		const conflicting = structuredClone(bundle);
 		conflicting.responsePayloads[0].rawPayload.responseText = "Mutated after persistence";

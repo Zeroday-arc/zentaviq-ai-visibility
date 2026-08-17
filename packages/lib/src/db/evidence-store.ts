@@ -2,7 +2,9 @@ import {
 	auditRuns,
 	citationClaimEvidenceLinks,
 	citationEvidenceRecords,
+	diagnosisFindings,
 	entityIdentityEvidenceRecords,
+	evidenceRemediations,
 	frozenPromptVariants,
 	intentFamilies,
 	providerModelVersions,
@@ -49,6 +51,12 @@ export class DrizzleImmutableEvidenceStore implements ImmutableEvidenceStore {
 			if (bundle.citationClaimLinks.length > 0) {
 				await tx.insert(citationClaimEvidenceLinks).values(bundle.citationClaimLinks).onConflictDoNothing();
 			}
+			if (bundle.findings.length > 0) {
+				await tx.insert(diagnosisFindings).values(bundle.findings).onConflictDoNothing();
+			}
+			if (bundle.remediations.length > 0) {
+				await tx.insert(evidenceRemediations).values(bundle.remediations).onConflictDoNothing();
+			}
 		});
 	}
 }
@@ -67,6 +75,8 @@ export class InMemoryImmutableEvidenceStore implements ImmutableEvidenceStore {
 		citationEvidence: new Map<string, ReplayAuditBundle["citationEvidence"][number]>(),
 		entityEvidence: new Map<string, ReplayAuditBundle["entityEvidence"][number]>(),
 		citationClaimLinks: new Map<string, ReplayAuditBundle["citationClaimLinks"][number]>(),
+		findings: new Map<string, ReplayAuditBundle["findings"][number]>(),
+		remediations: new Map<string, ReplayAuditBundle["remediations"][number]>(),
 	};
 
 	async persist(bundle: ReplayAuditBundle): Promise<void> {
@@ -80,6 +90,8 @@ export class InMemoryImmutableEvidenceStore implements ImmutableEvidenceStore {
 			citationEvidence: bundle.citationEvidence,
 			entityEvidence: bundle.entityEvidence,
 			citationClaimLinks: bundle.citationClaimLinks,
+			findings: bundle.findings,
+			remediations: bundle.remediations,
 		};
 
 		for (const [collectionName, records] of Object.entries(incoming)) {
@@ -120,6 +132,8 @@ export class InMemoryImmutableEvidenceStore implements ImmutableEvidenceStore {
 			citationEvidence: values(this.collections.citationEvidence),
 			entityEvidence: values(this.collections.entityEvidence),
 			citationClaimLinks: values(this.collections.citationClaimLinks),
+			findings: values(this.collections.findings),
+			remediations: values(this.collections.remediations),
 		};
 	}
 }

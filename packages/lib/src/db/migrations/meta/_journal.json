@@ -92,6 +92,13 @@
       "when": 1786979502555,
       "tag": "0012_evidence_classification_trace",
       "breakpoints": true
+    },
+    {
+      "idx": 13,
+      "version": "7",
+      "when": 1786982554119,
+      "tag": "0013_failure_diagnosis_remediation",
+      "breakpoints": true
     }
   ]
 }

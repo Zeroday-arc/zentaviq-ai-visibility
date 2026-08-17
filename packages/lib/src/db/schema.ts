@@ -46,6 +46,39 @@ export const evidenceReviewStateEnum = pgEnum("evidence_review_state", [
 	"rejected",
 ]);
 export const citationClaimTypeEnum = pgEnum("citation_claim_type", ["identity", "mention", "recommendation"]);
+export const diagnosisFailureStageEnum = pgEnum("diagnosis_failure_stage", [
+	"retrieval_failure",
+	"category_fit_ambiguity",
+	"entity_resolution_ambiguity",
+	"mention_gap",
+	"recommendation_gap",
+	"prominence_ranking_gap",
+	"citation_support_gap",
+	"independent_authority_gap",
+	"competitor_displacement",
+	"human_review_required",
+	"insufficient_evidence",
+	"maintain",
+]);
+export const remediationActionCategoryEnum = pgEnum("remediation_action_category", [
+	"category_clarification",
+	"targeted_problem_intent_content",
+	"comparison_customer_evidence",
+	"independent_authority_citation_acquisition",
+	"technical_retrieval_access_remediation",
+	"entity_disambiguation",
+	"prominence_recommendation_improvement",
+	"maintain",
+	"human_review_gather_more_evidence",
+]);
+export const remediationPriorityEnum = pgEnum("remediation_priority", ["low", "medium", "high"]);
+export const remediationApprovalStateEnum = pgEnum("remediation_approval_state", [
+	"not_required",
+	"proposed",
+	"pending_human_review",
+	"approved",
+	"rejected",
+]);
 
 export const brands = pgTable("brands", {
 	id: text("id").primaryKey().notNull(),
@@ -445,6 +478,84 @@ export const citationClaimEvidenceLinks = pgTable(
 	}),
 ).enableRLS();
 
+/** Immutable likely failure-stage diagnosis derived only from canonical replay evidence. */
+export const diagnosisFindings = pgTable(
+	"diagnosis_findings",
+	{
+		id: uuid("id").primaryKey().notNull(),
+		auditRunId: uuid("audit_run_id")
+			.references(() => auditRuns.id, { onDelete: "cascade" })
+			.notNull(),
+		intentFamilyId: uuid("intent_family_id")
+			.references(() => intentFamilies.id)
+			.notNull(),
+		promptVariantId: uuid("prompt_variant_id")
+			.references(() => frozenPromptVariants.id)
+			.notNull(),
+		schemaVersion: integer("schema_version").notNull(),
+		findingVersion: integer("finding_version").notNull(),
+		frozenPromptVersion: integer("frozen_prompt_version").notNull(),
+		likelyFailureStage: diagnosisFailureStageEnum("likely_failure_stage").notNull(),
+		confidence: real("confidence").notNull(),
+		reasonCodes: text("reason_codes").array().notNull(),
+		supportingEvidenceIds: uuid("supporting_evidence_ids").array().notNull(),
+		contradictingEvidenceIds: uuid("contradicting_evidence_ids").array().notNull(),
+		affectedProviderRunIds: uuid("affected_provider_run_ids").array().notNull(),
+		reviewState: evidenceReviewStateEnum("review_state").notNull(),
+		classifierId: text("classifier_id").notNull(),
+		classifierVersion: text("classifier_version").notNull(),
+		policyVersion: text("policy_version").notNull(),
+		diagnosisEvidence: jsonb("diagnosis_evidence").$type<unknown>().notNull(),
+		correlationId: text("correlation_id").notNull(),
+		createdAt: timestamp("created_at", { withTimezone: true }).notNull(),
+	},
+	(table) => ({
+		auditIntentVersionUnique: uniqueIndex("diagnosis_findings_audit_intent_version_unique").on(
+			table.auditRunId,
+			table.intentFamilyId,
+			table.findingVersion,
+		),
+		correlationUnique: uniqueIndex("diagnosis_findings_correlation_unique").on(table.correlationId),
+		auditIdx: index("diagnosis_findings_audit_idx").on(table.auditRunId),
+		intentIdx: index("diagnosis_findings_intent_idx").on(table.intentFamilyId),
+	}),
+).enableRLS();
+
+/** Immutable action, MAINTAIN decision, or review instruction created only after a diagnosis finding. */
+export const evidenceRemediations = pgTable(
+	"evidence_remediations",
+	{
+		id: uuid("id").primaryKey().notNull(),
+		auditRunId: uuid("audit_run_id")
+			.references(() => auditRuns.id, { onDelete: "cascade" })
+			.notNull(),
+		primaryFindingId: uuid("primary_finding_id")
+			.references(() => diagnosisFindings.id, { onDelete: "cascade" })
+			.notNull(),
+		linkedFindingIds: uuid("linked_finding_ids").array().notNull(),
+		schemaVersion: integer("schema_version").notNull(),
+		remediationVersion: integer("remediation_version").notNull(),
+		actionCategory: remediationActionCategoryEnum("action_category").notNull(),
+		rationale: text("rationale").notNull(),
+		acceptanceCriteria: text("acceptance_criteria").array().notNull(),
+		priority: remediationPriorityEnum("priority").notNull(),
+		confidence: real("confidence").notNull(),
+		expectedEvidenceChange: text("expected_evidence_change").array().notNull(),
+		approvalState: remediationApprovalStateEnum("approval_state").notNull(),
+		policyVersion: text("policy_version").notNull(),
+		correlationId: text("correlation_id").notNull(),
+		createdAt: timestamp("created_at", { withTimezone: true }).notNull(),
+	},
+	(table) => ({
+		findingVersionUnique: uniqueIndex("evidence_remediations_finding_version_unique").on(
+			table.primaryFindingId,
+			table.remediationVersion,
+		),
+		correlationUnique: uniqueIndex("evidence_remediations_correlation_unique").on(table.correlationId),
+		auditIdx: index("evidence_remediations_audit_idx").on(table.auditRunId),
+	}),
+).enableRLS();
+
 export const reports = pgTable(
 	"reports",
 	{
@@ -528,6 +639,10 @@ export type EntityIdentityEvidenceRecord = typeof entityIdentityEvidenceRecords.
 export type NewEntityIdentityEvidenceRecord = typeof entityIdentityEvidenceRecords.$inferInsert;
 export type CitationClaimEvidenceLink = typeof citationClaimEvidenceLinks.$inferSelect;
 export type NewCitationClaimEvidenceLink = typeof citationClaimEvidenceLinks.$inferInsert;
+export type DiagnosisFinding = typeof diagnosisFindings.$inferSelect;
+export type NewDiagnosisFinding = typeof diagnosisFindings.$inferInsert;
+export type EvidenceRemediation = typeof evidenceRemediations.$inferSelect;
+export type NewEvidenceRemediation = typeof evidenceRemediations.$inferInsert;
 
 export type Report = typeof reports.$inferSelect;
 export type NewReport = typeof reports.$inferInsert;

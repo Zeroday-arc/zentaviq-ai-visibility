@@ -12,8 +12,11 @@ import {
 	citationClaimEvidenceLinks,
 	citationEvidenceRecords,
 	competitors,
+	diagnosisFindings,
 	entityIdentityEvidenceRecords,
+	evidenceRemediations,
 	frozenPromptVariants,
+	intentFamilies,
 	providerResponsePayloads,
 	providerRuns,
 } from "@workspace/lib/db/schema";
@@ -21,7 +24,10 @@ import {
 	AUDIT_RECORD_SCHEMA_VERSION,
 	createReplayAuditBundle,
 	type CitationType,
+	type DiagnosisEvidenceSummary,
 	type EntityClassificationTrace,
+	type LikelyFailureStage,
+	type RemediationActionCategory,
 	type ReplayAuditSummary,
 } from "@workspace/lib/replay-audit";
 
@@ -30,6 +36,7 @@ const brandInputSchema = z.object({ brandId: z.string().min(1) });
 export interface ReplayEvidenceView {
 	summary: ReplayAuditSummary;
 	scenarios: Array<{
+		providerRunId: string;
 		fixtureId: string;
 		promptText: string;
 		rawResponse: string;
@@ -67,6 +74,50 @@ export interface ReplayEvidenceView {
 			}>;
 		}>;
 	}>;
+	diagnoses: Array<{
+		id: string;
+		intentKey: string;
+		intentName: string;
+		promptText: string;
+		frozenPromptVersion: number;
+		likelyFailureStage: LikelyFailureStage;
+		confidence: number;
+		reasonCodes: string[];
+		supportingEvidenceIds: string[];
+		contradictingEvidenceIds: string[];
+		affectedProviderRunIds: string[];
+		reviewState: "not_required" | "pending" | "accepted" | "rejected";
+		classifierId: string;
+		classifierVersion: string;
+		policyVersion: string;
+		correlationId: string;
+		evidence: DiagnosisEvidenceSummary;
+		affectedRuns: Array<{
+			providerRunId: string;
+			fixtureId: string;
+			rawResponse: string;
+			entities: Array<{
+				name: string;
+				role: "brand" | "competitor" | "unknown";
+				retrieved: boolean;
+				mentioned: boolean;
+				recommended: boolean;
+				prominenceRank: number | null;
+				cited: boolean;
+			}>;
+		}>;
+		remediation: null | {
+			id: string;
+			actionCategory: RemediationActionCategory;
+			rationale: string;
+			acceptanceCriteria: string[];
+			priority: "low" | "medium" | "high";
+			confidence: number;
+			expectedEvidenceChange: string[];
+			approvalState: "not_required" | "proposed" | "pending_human_review" | "approved" | "rejected";
+			policyVersion: string;
+		};
+	}>;
 }
 
 function requireLocalReplayMode(): void {
@@ -100,12 +151,16 @@ async function readPersistedSummary(auditRunId: string): Promise<ReplayAuditSumm
 			recommendedEntities: 0,
 			citedEntities: 0,
 			pendingReviewEntities: 0,
+			diagnosisFindingCount: 0,
+			remediationCount: 0,
+			maintainDecisionCount: 0,
+			diagnosisReviewCount: 0,
 			citationTypes: { first_party: 0, independent: 0, competitor: 0, unknown: 0 },
 			completedAt: auditRun.completedAt.toISOString(),
 		};
 	}
 
-	const [payloads, entities, citations] = await Promise.all([
+	const [payloads, entities, citations, findings, remediations] = await Promise.all([
 		db
 			.select({ id: providerResponsePayloads.id })
 			.from(providerResponsePayloads)
@@ -124,6 +179,8 @@ async function readPersistedSummary(auditRunId: string): Promise<ReplayAuditSumm
 			.select({ citationType: citationEvidenceRecords.citationType })
 			.from(citationEvidenceRecords)
 			.where(inArray(citationEvidenceRecords.providerRunId, runIds)),
+		db.select().from(diagnosisFindings).where(eq(diagnosisFindings.auditRunId, auditRunId)),
+		db.select().from(evidenceRemediations).where(eq(evidenceRemediations.auditRunId, auditRunId)),
 	]);
 	const entityIds = entities.map((entity) => entity.id).filter((id): id is string => Boolean(id));
 	const citationClaimLinkCount = entityIds.length
@@ -156,6 +213,10 @@ async function readPersistedSummary(auditRunId: string): Promise<ReplayAuditSumm
 		recommendedEntities: entities.filter((entity) => entity.recommended).length,
 		citedEntities: entities.filter((entity) => entity.cited).length,
 		pendingReviewEntities: entities.filter((entity) => entity.reviewState === "pending").length,
+		diagnosisFindingCount: findings.length,
+		remediationCount: remediations.length,
+		maintainDecisionCount: findings.filter((finding) => finding.likelyFailureStage === "maintain").length,
+		diagnosisReviewCount: findings.filter((finding) => finding.reviewState === "pending").length,
 		citationTypes,
 		completedAt: auditRun.completedAt.toISOString(),
 	};
@@ -167,20 +228,25 @@ async function readPersistedEvidence(auditRunId: string): Promise<ReplayEvidence
 	const runs = await db
 		.select({
 			id: providerRuns.id,
+			promptVariantId: providerRuns.promptVariantId,
 			correlationId: providerRuns.correlationId,
 			extractorId: providerRuns.extractorId,
 			extractorVersion: providerRuns.extractorVersion,
 			promptText: frozenPromptVariants.promptText,
+			promptVersion: frozenPromptVariants.version,
+			intentFamilyId: frozenPromptVariants.intentFamilyId,
 		})
 		.from(providerRuns)
 		.innerJoin(frozenPromptVariants, eq(providerRuns.promptVariantId, frozenPromptVariants.id))
 		.where(eq(providerRuns.auditRunId, auditRunId));
 	const runIds = runs.map((run) => run.id);
-	if (runIds.length === 0) return { summary, scenarios: [] };
-	const [payloads, entities, citations] = await Promise.all([
+	if (runIds.length === 0) return { summary, scenarios: [], diagnoses: [] };
+	const [payloads, entities, citations, findings, remediations] = await Promise.all([
 		db.select().from(providerResponsePayloads).where(inArray(providerResponsePayloads.providerRunId, runIds)),
 		db.select().from(entityIdentityEvidenceRecords).where(inArray(entityIdentityEvidenceRecords.providerRunId, runIds)),
 		db.select().from(citationEvidenceRecords).where(inArray(citationEvidenceRecords.providerRunId, runIds)),
+		db.select().from(diagnosisFindings).where(eq(diagnosisFindings.auditRunId, auditRunId)),
+		db.select().from(evidenceRemediations).where(eq(evidenceRemediations.auditRunId, auditRunId)),
 	]);
 	const citationIds = citations.map((citation) => citation.id);
 	const links = citationIds.length
@@ -190,6 +256,11 @@ async function readPersistedEvidence(auditRunId: string): Promise<ReplayEvidence
 				.where(inArray(citationClaimEvidenceLinks.citationEvidenceId, citationIds))
 		: [];
 	const entitiesById = new Map(entities.map((entity) => [entity.id, entity]));
+	const intentIds = [...new Set(findings.map((finding) => finding.intentFamilyId))];
+	const intentRows = intentIds.length
+		? await db.select().from(intentFamilies).where(inArray(intentFamilies.id, intentIds))
+		: [];
+	const intentsById = new Map(intentRows.map((intent) => [intent.id, intent]));
 	const scenarios = runs
 		.map((run) => {
 			const payload = payloads.find((candidate) => candidate.providerRunId === run.id);
@@ -197,6 +268,7 @@ async function readPersistedEvidence(auditRunId: string): Promise<ReplayEvidence
 			const rawPayload = payload.rawPayload as { retrieved: boolean; responseText: string };
 			const runEntities = entities.filter((entity) => entity.providerRunId === run.id);
 			return {
+				providerRunId: run.id,
 				fixtureId: payload.fixtureId,
 				promptText: run.promptText,
 				rawResponse: rawPayload.responseText,
@@ -249,7 +321,67 @@ async function readPersistedEvidence(auditRunId: string): Promise<ReplayEvidence
 		})
 		.filter((scenario): scenario is NonNullable<typeof scenario> => Boolean(scenario))
 		.sort((left, right) => left.fixtureId.localeCompare(right.fixtureId));
-	return { summary, scenarios };
+	const scenariosByRunId = new Map(scenarios.map((scenario) => [scenario.providerRunId, scenario]));
+	const promptsById = new Map(runs.map((run) => [run.promptVariantId, run]));
+	const diagnoses = findings
+		.map((finding) => {
+			const intent = intentsById.get(finding.intentFamilyId);
+			const prompt = promptsById.get(finding.promptVariantId);
+			if (!intent || !prompt) return null;
+			const remediation = remediations.find((candidate) => candidate.primaryFindingId === finding.id);
+			return {
+				id: finding.id,
+				intentKey: intent.key,
+				intentName: intent.name,
+				promptText: prompt.promptText,
+				frozenPromptVersion: finding.frozenPromptVersion,
+				likelyFailureStage: finding.likelyFailureStage,
+				confidence: finding.confidence,
+				reasonCodes: finding.reasonCodes,
+				supportingEvidenceIds: finding.supportingEvidenceIds,
+				contradictingEvidenceIds: finding.contradictingEvidenceIds,
+				affectedProviderRunIds: finding.affectedProviderRunIds,
+				reviewState: finding.reviewState,
+				classifierId: finding.classifierId,
+				classifierVersion: finding.classifierVersion,
+				policyVersion: finding.policyVersion,
+				correlationId: finding.correlationId,
+				evidence: finding.diagnosisEvidence as DiagnosisEvidenceSummary,
+				affectedRuns: finding.affectedProviderRunIds
+					.map((providerRunId) => scenariosByRunId.get(providerRunId))
+					.filter((scenario): scenario is NonNullable<typeof scenario> => Boolean(scenario))
+					.map((scenario) => ({
+						providerRunId: scenario.providerRunId,
+						fixtureId: scenario.fixtureId,
+						rawResponse: scenario.rawResponse,
+						entities: scenario.entities.map((entity) => ({
+							name: entity.name,
+							role: entity.role,
+							retrieved: entity.retrieved,
+							mentioned: entity.mentioned,
+							recommended: entity.recommended,
+							prominenceRank: entity.prominenceRank,
+							cited: entity.cited,
+						})),
+					})),
+				remediation: remediation
+					? {
+							id: remediation.id,
+							actionCategory: remediation.actionCategory,
+							rationale: remediation.rationale,
+							acceptanceCriteria: remediation.acceptanceCriteria,
+							priority: remediation.priority,
+							confidence: remediation.confidence,
+							expectedEvidenceChange: remediation.expectedEvidenceChange,
+							approvalState: remediation.approvalState,
+							policyVersion: remediation.policyVersion,
+						}
+					: null,
+			};
+		})
+		.filter((diagnosis): diagnosis is NonNullable<typeof diagnosis> => Boolean(diagnosis))
+		.sort((left, right) => left.intentKey.localeCompare(right.intentKey));
+	return { summary, scenarios, diagnoses };
 }
 
 export const getLatestReplayBaselineFn = createServerFn({ method: "GET" })

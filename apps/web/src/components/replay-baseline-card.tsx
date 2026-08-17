@@ -7,6 +7,10 @@ import { getLatestReplayBaselineFn, getLatestReplayEvidenceFn, runReplayBaseline
 const replayBaselineKey = (brandId: string) => ["replay-baseline", brandId] as const;
 const replayEvidenceKey = (brandId: string) => ["replay-evidence", brandId] as const;
 
+function policyLabel(value: string): string {
+	return value === "maintain" ? "MAINTAIN" : value.replaceAll("_", " ");
+}
+
 export function ReplayBaselineCard({ brandId }: { brandId: string }) {
 	const queryClient = useQueryClient();
 	const replayQuery = useQuery({
@@ -56,7 +60,7 @@ export function ReplayBaselineCard({ brandId }: { brandId: string }) {
 							<IconShieldCheck className="h-4 w-4 text-emerald-600" />
 							Immutable evidence persisted
 						</div>
-						<div className="grid grid-cols-2 gap-x-4 gap-y-1 text-xs text-muted-foreground sm:grid-cols-5">
+						<div className="grid grid-cols-2 gap-x-4 gap-y-1 text-xs text-muted-foreground sm:grid-cols-7">
 							<span>
 								<strong className="text-foreground">{summary.fixtureCount}</strong> fixtures
 							</span>
@@ -72,6 +76,117 @@ export function ReplayBaselineCard({ brandId }: { brandId: string }) {
 							<span>
 								<strong className="text-foreground">{summary.pendingReviewEntities}</strong> review
 							</span>
+							<span>
+								<strong className="text-foreground">{summary.diagnosisFindingCount}</strong> findings
+							</span>
+							<span>
+								<strong className="text-foreground">{summary.maintainDecisionCount}</strong> maintain
+							</span>
+						</div>
+					</div>
+				)}
+
+				{evidence && evidence.diagnoses.length > 0 && (
+					<div className="space-y-3">
+						<div>
+							<h3 className="text-sm font-semibold">Likely failure diagnosis and remediation</h3>
+							<p className="text-xs text-muted-foreground">
+								Deterministic, evidence-backed likely stages only. Actions are created after diagnosis and never directly
+								from a visibility score.
+							</p>
+						</div>
+						<div className="max-h-[48rem] space-y-2 overflow-y-auto pr-1">
+							{evidence.diagnoses.map((diagnosis) => (
+								<details key={diagnosis.id} className="rounded-md border bg-background p-3">
+									<summary className="cursor-pointer text-sm font-medium">
+										{diagnosis.intentName} · {policyLabel(diagnosis.likelyFailureStage)}
+									</summary>
+									<div className="mt-3 space-y-3 text-xs">
+										<div className="flex flex-wrap items-center gap-2">
+											<span className="rounded bg-muted px-1.5 py-0.5">
+												Likely diagnosis: {policyLabel(diagnosis.likelyFailureStage)}
+											</span>
+											<span>confidence {diagnosis.confidence}</span>
+											{diagnosis.reviewState === "pending" && (
+												<span className="inline-flex items-center gap-1 rounded bg-amber-500/10 px-1.5 py-0.5 text-amber-700 dark:text-amber-300">
+													<IconAlertTriangle className="h-3 w-3" /> Human review required
+												</span>
+											)}
+										</div>
+										<div>
+											<p className="font-medium">Frozen prompt v{diagnosis.frozenPromptVersion}</p>
+											<p className="text-muted-foreground">{diagnosis.promptText}</p>
+										</div>
+										{diagnosis.affectedRuns.map((run) => (
+											<div key={run.providerRunId} className="rounded border p-2">
+												<p className="font-medium">Raw response · {run.fixtureId}</p>
+												<pre className="mt-1 whitespace-pre-wrap rounded bg-muted/50 p-2 font-mono text-[11px]">
+													{run.rawResponse || "[no response retrieved]"}
+												</pre>
+												<div className="mt-2 space-y-1">
+													{run.entities.map((entity) => (
+														<p key={`${run.providerRunId}:${entity.name}`} className="text-muted-foreground">
+															Classification · {entity.name} ({entity.role}): retrieved {String(entity.retrieved)}, mentioned{" "}
+															{String(entity.mentioned)}, recommended {String(entity.recommended)}, rank{" "}
+															{entity.prominenceRank ?? "none"}, cited {String(entity.cited)}
+														</p>
+													))}
+												</div>
+											</div>
+										))}
+										<div className="rounded border-l-4 border-l-primary p-2">
+											<p className="font-medium">Finding · {policyLabel(diagnosis.likelyFailureStage)}</p>
+											<p className="text-muted-foreground">Reasons: {diagnosis.reasonCodes.join(", ")}</p>
+											<p className="break-all text-[10px] text-muted-foreground">
+												Supporting evidence: {diagnosis.supportingEvidenceIds.join(", ")}
+											</p>
+											{diagnosis.contradictingEvidenceIds.length > 0 && (
+												<p className="break-all text-[10px] text-muted-foreground">
+													Contradicting evidence: {diagnosis.contradictingEvidenceIds.join(", ")}
+												</p>
+											)}
+										</div>
+										{diagnosis.evidence.competitorCitationGap.winners.map((winner) => (
+											<div key={winner.entityId} className="rounded border border-dashed p-2">
+												<p className="font-medium">Competitor citation gap · {winner.entityName}</p>
+												<p className="text-muted-foreground">
+													{winner.providerRunIds.length} supporting runs · independent {winner.citationTypeCounts.independent} ·
+													competitor-owned {winner.citationTypeCounts.competitor} · first-party{" "}
+													{winner.citationTypeCounts.first_party} · unknown {winner.citationTypeCounts.unknown}
+												</p>
+												<p className="text-muted-foreground">
+													Independent sources: {winner.independentSourceDomains.join(", ") || "none"}
+												</p>
+											</div>
+										))}
+										{diagnosis.remediation ? (
+											<div className="rounded bg-muted/40 p-2">
+												<p className="font-medium">
+													{policyLabel(diagnosis.remediation.actionCategory)} · {diagnosis.remediation.priority} priority
+												</p>
+												<p className="mt-1 text-muted-foreground">{diagnosis.remediation.rationale}</p>
+												<p className="mt-2 font-medium">Acceptance / retest criteria</p>
+												<ul className="list-disc space-y-1 pl-4 text-muted-foreground">
+													{diagnosis.remediation.acceptanceCriteria.map((criterion) => (
+														<li key={criterion}>{criterion}</li>
+													))}
+												</ul>
+											</div>
+										) : (
+											<div className="rounded bg-muted/40 p-2">
+												<p className="font-medium">Insufficient evidence · no remediation generated</p>
+												<p className="text-muted-foreground">
+													Gather another persisted replay sample for this frozen intent before proposing an action.
+												</p>
+											</div>
+										)}
+										<p className="text-[10px] text-muted-foreground">
+											{diagnosis.classifierId} v{diagnosis.classifierVersion} · policy v{diagnosis.policyVersion} ·{" "}
+											{diagnosis.correlationId}
+										</p>
+									</div>
+								</details>
+							))}
 						</div>
 					</div>
 				)}

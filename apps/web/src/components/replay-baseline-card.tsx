@@ -1,11 +1,18 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { IconAlertTriangle, IconDatabase, IconPlayerPlay, IconShieldCheck } from "@tabler/icons-react";
+import { IconAlertTriangle, IconDatabase, IconLock, IconPlayerPlay, IconRefresh, IconShieldCheck } from "@tabler/icons-react";
 import { Button } from "@workspace/ui/components/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@workspace/ui/components/card";
 import { getLatestReplayBaselineFn, getLatestReplayEvidenceFn, runReplayBaselineFn } from "@/server/replay-audit";
+import {
+	freezeLatestReplayBaselineFn,
+	getLatestAuditReportFn,
+	runDeterministicRetestFn,
+} from "@/server/audit-report";
+import { CustomerAuditReport } from "@/components/customer-audit-report";
 
 const replayBaselineKey = (brandId: string) => ["replay-baseline", brandId] as const;
 const replayEvidenceKey = (brandId: string) => ["replay-evidence", brandId] as const;
+const auditReportKey = (brandId: string) => ["fixture-audit-report", brandId] as const;
 
 function policyLabel(value: string): string {
 	return value === "maintain" ? "MAINTAIN" : value.replaceAll("_", " ");
@@ -24,6 +31,7 @@ export function ReplayBaselineCard({ brandId }: { brandId: string }) {
 		onSuccess: (result) => {
 			queryClient.setQueryData(replayBaselineKey(brandId), result.summary);
 			queryClient.setQueryData(replayEvidenceKey(brandId), result);
+			queryClient.setQueryData(auditReportKey(brandId), null);
 		},
 	});
 	const evidenceQuery = useQuery({
@@ -32,10 +40,31 @@ export function ReplayBaselineCard({ brandId }: { brandId: string }) {
 		retry: false,
 		refetchOnWindowFocus: false,
 	});
+	const reportQuery = useQuery({
+		queryKey: auditReportKey(brandId),
+		queryFn: () => getLatestAuditReportFn({ data: { brandId } }),
+		retry: false,
+		refetchOnWindowFocus: false,
+	});
+	const freezeMutation = useMutation({
+		mutationFn: () => freezeLatestReplayBaselineFn({ data: { brandId } }),
+		onSuccess: (result) => queryClient.setQueryData(auditReportKey(brandId), result),
+	});
+	const retestMutation = useMutation({
+		mutationFn: () => runDeterministicRetestFn({ data: { brandId } }),
+		onSuccess: (result) => queryClient.setQueryData(auditReportKey(brandId), result),
+	});
 
 	const summary = replayMutation.data?.summary ?? replayQuery.data;
 	const evidence = replayMutation.data ?? evidenceQuery.data;
-	const error = replayMutation.error ?? replayQuery.error ?? evidenceQuery.error;
+	const report = retestMutation.data ?? freezeMutation.data ?? reportQuery.data;
+	const error =
+		replayMutation.error ??
+		replayQuery.error ??
+		evidenceQuery.error ??
+		reportQuery.error ??
+		freezeMutation.error ??
+		retestMutation.error;
 
 	return (
 		<Card className="w-full text-left shadow-none border-dashed">
@@ -275,24 +304,45 @@ export function ReplayBaselineCard({ brandId }: { brandId: string }) {
 
 				{error && (
 					<p className="text-sm text-destructive" role="alert">
-						{error instanceof Error ? error.message : "Fixture replay failed"}
+						The local fixture workflow could not complete. Check the local database migration and try again.
 					</p>
 				)}
 
-				<Button
-					type="button"
-					variant="secondary"
-					className="w-full"
-					disabled={replayMutation.isPending || replayQuery.isLoading}
-					onClick={() => replayMutation.mutate()}
-				>
-					<IconPlayerPlay className="mr-2 h-4 w-4" />
-					{replayMutation.isPending
-						? "Persisting fixture evidence…"
-						: summary
-							? "Replay baseline again"
-							: "Run fixture baseline"}
-				</Button>
+				<p className="text-xs text-muted-foreground print:hidden">
+					Freezing locks the exact baseline and approves eligible proposed actions only for this local fixture retest;
+					human-review and insufficient-evidence items remain withheld.
+				</p>
+				<div className="grid gap-2 print:hidden sm:grid-cols-3">
+					<Button
+						type="button"
+						variant="secondary"
+						disabled={replayMutation.isPending || replayQuery.isLoading}
+						onClick={() => replayMutation.mutate()}
+					>
+						<IconPlayerPlay className="mr-2 h-4 w-4" />
+						{replayMutation.isPending ? "Persisting baseline…" : summary ? "Replay baseline again" : "Run fixture baseline"}
+					</Button>
+					<Button
+						type="button"
+						variant="outline"
+						disabled={!summary || freezeMutation.isPending || Boolean(report)}
+						onClick={() => freezeMutation.mutate()}
+					>
+						<IconLock className="mr-2 h-4 w-4" />
+						{freezeMutation.isPending ? "Freezing…" : report ? "Baseline frozen" : "Freeze & approve retest"}
+					</Button>
+					<Button
+						type="button"
+						variant="outline"
+						disabled={!report || retestMutation.isPending || Boolean(report?.outcomeCounts)}
+						onClick={() => retestMutation.mutate()}
+					>
+						<IconRefresh className="mr-2 h-4 w-4" />
+						{retestMutation.isPending ? "Running retest…" : report?.outcomeCounts ? "Retest persisted" : "Run fixture retest"}
+					</Button>
+				</div>
+
+				{report && <CustomerAuditReport report={report} />}
 			</CardContent>
 		</Card>
 	);

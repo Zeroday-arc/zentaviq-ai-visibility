@@ -23,7 +23,7 @@ export * from "./schema-auth";
 // ============================================================================
 
 export const reportStatusEnum = pgEnum("report_status", ["pending", "processing", "completed", "failed"]);
-export const auditRunKindEnum = pgEnum("audit_run_kind", ["baseline", "audit"]);
+export const auditRunKindEnum = pgEnum("audit_run_kind", ["baseline", "audit", "retest"]);
 export const auditExecutionModeEnum = pgEnum("audit_execution_mode", ["fixture_replay", "live"]);
 export const retrievalStatusEnum = pgEnum("retrieval_status", ["retrieved", "not_retrieved"]);
 export const citationEvidenceTypeEnum = pgEnum("citation_evidence_type", [
@@ -78,6 +78,19 @@ export const remediationApprovalStateEnum = pgEnum("remediation_approval_state",
 	"pending_human_review",
 	"approved",
 	"rejected",
+]);
+export const auditComparisonOutcomeEnum = pgEnum("audit_comparison_outcome", [
+	"improved",
+	"unchanged",
+	"regressed",
+	"insufficient_evidence",
+	"pending_human_review",
+]);
+export const retestDecisionStateEnum = pgEnum("retest_decision_state", [
+	"approved_remediation",
+	"maintain",
+	"pending_human_review",
+	"insufficient_evidence",
 ]);
 
 export const brands = pgTable("brands", {
@@ -556,6 +569,106 @@ export const evidenceRemediations = pgTable(
 	}),
 ).enableRLS();
 
+/** Immutable customer-report snapshot freezing the exact baseline evidence and policy inputs. */
+export const frozenAuditReports = pgTable(
+	"frozen_audit_reports",
+	{
+		id: uuid("id").primaryKey().notNull(),
+		brandId: text("brand_id")
+			.references(() => brands.id, { onDelete: "cascade" })
+			.notNull(),
+		baselineAuditRunId: uuid("baseline_audit_run_id")
+			.references(() => auditRuns.id)
+			.notNull(),
+		schemaVersion: integer("schema_version").notNull(),
+		reportVersion: integer("report_version").notNull(),
+		baselineVersion: integer("baseline_version").notNull(),
+		businessIdentitySnapshot: jsonb("business_identity_snapshot").$type<unknown>().notNull(),
+		intentVersionSnapshot: jsonb("intent_version_snapshot").$type<unknown>().notNull(),
+		promptVersionSnapshot: jsonb("prompt_version_snapshot").$type<unknown>().notNull(),
+		providerVersionSnapshot: jsonb("provider_version_snapshot").$type<unknown>().notNull(),
+		fixtureManifest: jsonb("fixture_manifest").$type<unknown>().notNull(),
+		policyVersionSnapshot: jsonb("policy_version_snapshot").$type<unknown>().notNull(),
+		decisionSnapshot: jsonb("decision_snapshot").$type<unknown>().notNull(),
+		evidenceRecordIds: uuid("evidence_record_ids").array().notNull(),
+		findingIds: uuid("finding_ids").array().notNull(),
+		remediationIds: uuid("remediation_ids").array().notNull(),
+		reportGenerationVersion: text("report_generation_version").notNull(),
+		benchmarkVersion: text("benchmark_version").notNull(),
+		snapshotChecksum: text("snapshot_checksum").notNull(),
+		frozenAt: timestamp("frozen_at", { withTimezone: true }).notNull(),
+		correlationId: text("correlation_id").notNull(),
+		createdAt: timestamp("created_at", { withTimezone: true }).notNull(),
+	},
+	(table) => ({
+		baselineVersionUnique: uniqueIndex("frozen_audit_reports_baseline_version_unique").on(
+			table.baselineAuditRunId,
+			table.reportVersion,
+		),
+		correlationUnique: uniqueIndex("frozen_audit_reports_correlation_unique").on(table.correlationId),
+		checksumUnique: uniqueIndex("frozen_audit_reports_checksum_unique").on(table.snapshotChecksum),
+		brandFrozenIdx: index("frozen_audit_reports_brand_frozen_idx").on(table.brandId, table.frozenAt),
+	}),
+).enableRLS();
+
+/** Immutable per-intent baseline-versus-retest observation tied to one frozen report. */
+export const auditRetestComparisons = pgTable(
+	"audit_retest_comparisons",
+	{
+		id: uuid("id").primaryKey().notNull(),
+		brandId: text("brand_id")
+			.references(() => brands.id, { onDelete: "cascade" })
+			.notNull(),
+		frozenReportId: uuid("frozen_report_id")
+			.references(() => frozenAuditReports.id)
+			.notNull(),
+		baselineAuditRunId: uuid("baseline_audit_run_id")
+			.references(() => auditRuns.id)
+			.notNull(),
+		retestAuditRunId: uuid("retest_audit_run_id")
+			.references(() => auditRuns.id)
+			.notNull(),
+		intentFamilyId: uuid("intent_family_id")
+			.references(() => intentFamilies.id)
+			.notNull(),
+		findingId: uuid("finding_id").references(() => diagnosisFindings.id),
+		remediationId: uuid("remediation_id").references(() => evidenceRemediations.id),
+		schemaVersion: integer("schema_version").notNull(),
+		comparisonVersion: integer("comparison_version").notNull(),
+		outcome: auditComparisonOutcomeEnum("outcome").notNull(),
+		confidence: real("confidence").notNull(),
+		reasonCodes: text("reason_codes").array().notNull(),
+		decisionState: retestDecisionStateEnum("decision_state").notNull(),
+		promptVariantIds: uuid("prompt_variant_ids").array().notNull(),
+		baselineEvidenceIds: uuid("baseline_evidence_ids").array().notNull(),
+		retestEvidenceIds: uuid("retest_evidence_ids").array().notNull(),
+		acceptanceCriteriaSnapshot: text("acceptance_criteria_snapshot").array().notNull(),
+		expectedEvidenceChangeSnapshot: text("expected_evidence_change_snapshot").array().notNull(),
+		criteriaEvaluation: jsonb("criteria_evaluation").$type<unknown>().notNull(),
+		baselineMetrics: jsonb("baseline_metrics").$type<unknown>().notNull(),
+		retestMetrics: jsonb("retest_metrics").$type<unknown>().notNull(),
+		observedChanges: jsonb("observed_changes").$type<unknown>().notNull(),
+		providerConfigurationSnapshot: jsonb("provider_configuration_snapshot").$type<unknown>().notNull(),
+		comparatorId: text("comparator_id").notNull(),
+		comparatorVersion: text("comparator_version").notNull(),
+		comparisonChecksum: text("comparison_checksum").notNull(),
+		correlationId: text("correlation_id").notNull(),
+		createdAt: timestamp("created_at", { withTimezone: true }).notNull(),
+	},
+	(table) => ({
+		reportRetestIntentVersionUnique: uniqueIndex("audit_retest_comparisons_report_retest_intent_unique").on(
+			table.frozenReportId,
+			table.retestAuditRunId,
+			table.intentFamilyId,
+			table.comparisonVersion,
+		),
+		correlationUnique: uniqueIndex("audit_retest_comparisons_correlation_unique").on(table.correlationId),
+		checksumUnique: uniqueIndex("audit_retest_comparisons_checksum_unique").on(table.comparisonChecksum),
+		brandCreatedIdx: index("audit_retest_comparisons_brand_created_idx").on(table.brandId, table.createdAt),
+		reportIdx: index("audit_retest_comparisons_report_idx").on(table.frozenReportId),
+	}),
+).enableRLS();
+
 export const reports = pgTable(
 	"reports",
 	{
@@ -643,6 +756,10 @@ export type DiagnosisFinding = typeof diagnosisFindings.$inferSelect;
 export type NewDiagnosisFinding = typeof diagnosisFindings.$inferInsert;
 export type EvidenceRemediation = typeof evidenceRemediations.$inferSelect;
 export type NewEvidenceRemediation = typeof evidenceRemediations.$inferInsert;
+export type FrozenAuditReport = typeof frozenAuditReports.$inferSelect;
+export type NewFrozenAuditReport = typeof frozenAuditReports.$inferInsert;
+export type AuditRetestComparison = typeof auditRetestComparisons.$inferSelect;
+export type NewAuditRetestComparison = typeof auditRetestComparisons.$inferInsert;
 
 export type Report = typeof reports.$inferSelect;
 export type NewReport = typeof reports.$inferInsert;

@@ -1,16 +1,24 @@
-import { and, desc, eq, inArray } from "drizzle-orm";
+import { desc, eq, inArray } from "drizzle-orm";
+import {
+	summarizeComparisonOutcomes,
+	verifyAuditComparisonChecksum,
+	verifyFrozenAuditReportChecksum,
+	type AuditRetestComparisonRecord,
+	type FrozenAuditReportRecord,
+} from "../src/audit-report";
 import { db } from "../src/db/db";
 import {
 	auditRuns,
+	auditRetestComparisons,
 	citationClaimEvidenceLinks,
 	citationEvidenceRecords,
 	diagnosisFindings,
 	entityIdentityEvidenceRecords,
 	evidenceRemediations,
+	frozenAuditReports,
 	providerResponsePayloads,
 	providerRuns,
 } from "../src/db/schema";
-import { AUDIT_RECORD_SCHEMA_VERSION } from "../src/replay-audit";
 
 function assertLocalDatabase(): void {
 	const databaseUrl = process.env.DATABASE_URL;
@@ -40,18 +48,9 @@ function isImmutableUpdateError(error: unknown): boolean {
 
 async function main(): Promise<void> {
 	assertLocalDatabase();
-	const [latest] = await db
-		.select()
-		.from(auditRuns)
-		.where(
-			and(
-				eq(auditRuns.runKind, "baseline"),
-				eq(auditRuns.executionMode, "fixture_replay"),
-				eq(auditRuns.schemaVersion, AUDIT_RECORD_SCHEMA_VERSION),
-			),
-		)
-		.orderBy(desc(auditRuns.completedAt))
-		.limit(1);
+	const [frozenReport] = await db.select().from(frozenAuditReports).orderBy(desc(frozenAuditReports.frozenAt)).limit(1);
+	if (!frozenReport) throw new Error("No frozen fixture audit report found");
+	const [latest] = await db.select().from(auditRuns).where(eq(auditRuns.id, frozenReport.baselineAuditRunId)).limit(1);
 	if (!latest) throw new Error("No persisted fixture replay baseline found");
 
 	const runs = await db
@@ -91,6 +90,17 @@ async function main(): Promise<void> {
 		db.select().from(diagnosisFindings).where(eq(diagnosisFindings.auditRunId, latest.id)),
 		db.select().from(evidenceRemediations).where(eq(evidenceRemediations.auditRunId, latest.id)),
 	]);
+	const comparisons = await db
+		.select()
+		.from(auditRetestComparisons)
+		.where(eq(auditRetestComparisons.frozenReportId, frozenReport.id));
+	if (comparisons.length === 0) throw new Error("No persisted fixture retest comparisons found");
+	const retestAuditRunId = comparisons[0]?.retestAuditRunId;
+	if (!retestAuditRunId) throw new Error("Retest comparison is missing its audit linkage");
+	const retestRuns = await db
+		.select({ id: providerRuns.id })
+		.from(providerRuns)
+		.where(eq(providerRuns.auditRunId, retestAuditRunId));
 
 	let immutableUpdateRejected = false;
 	try {
@@ -139,6 +149,30 @@ async function main(): Promise<void> {
 		if (!immutableRemediationUpdateRejected) throw error;
 	}
 	if (!immutableRemediationUpdateRejected) throw new Error("Immutable remediation update was not rejected");
+	let immutableFrozenReportUpdateRejected = false;
+	try {
+		await db
+			.update(frozenAuditReports)
+			.set({ correlationId: frozenReport.correlationId })
+			.where(eq(frozenAuditReports.id, frozenReport.id));
+	} catch (error) {
+		immutableFrozenReportUpdateRejected = isImmutableUpdateError(error);
+		if (!immutableFrozenReportUpdateRejected) throw error;
+	}
+	if (!immutableFrozenReportUpdateRejected) throw new Error("Immutable frozen report update was not rejected");
+	let immutableComparisonUpdateRejected = false;
+	const firstComparison = comparisons[0];
+	if (!firstComparison) throw new Error("No comparison was persisted");
+	try {
+		await db
+			.update(auditRetestComparisons)
+			.set({ correlationId: firstComparison.correlationId })
+			.where(eq(auditRetestComparisons.id, firstComparison.id));
+	} catch (error) {
+		immutableComparisonUpdateRejected = isImmutableUpdateError(error);
+		if (!immutableComparisonUpdateRejected) throw error;
+	}
+	if (!immutableComparisonUpdateRejected) throw new Error("Immutable retest comparison update was not rejected");
 
 	const citationTypes = citations.reduce<Record<string, number>>((counts, citation) => {
 		counts[citation.citationType] = (counts[citation.citationType] ?? 0) + 1;
@@ -162,17 +196,30 @@ async function main(): Promise<void> {
 		remediations: remediations.length,
 		maintainDecisions: findings.filter((finding) => finding.likelyFailureStage === "maintain").length,
 		diagnosisReviewRequired: findings.filter((finding) => finding.reviewState === "pending").length,
-		insufficientEvidenceFindings: findings.filter((finding) => finding.likelyFailureStage === "insufficient_evidence").length,
+		insufficientEvidenceFindings: findings.filter((finding) => finding.likelyFailureStage === "insufficient_evidence")
+			.length,
 		repeatedCompetitorAuthorityFindings: findings.filter((finding) => {
-			const evidence = finding.diagnosisEvidence as { competitorCitationGap?: { repeatedSupportingEvidence?: unknown } };
+			const evidence = finding.diagnosisEvidence as {
+				competitorCitationGap?: { repeatedSupportingEvidence?: unknown };
+			};
 			return evidence.competitorCitationGap?.repeatedSupportingEvidence === true;
 		}).length,
+		frozenReports: 1,
+		frozenReportChecksumVerified: verifyFrozenAuditReportChecksum(frozenReport as FrozenAuditReportRecord),
+		retestProviderRuns: retestRuns.length,
+		retestComparisons: comparisons.length,
+		comparisonChecksumsVerified: comparisons.every((comparison) =>
+			verifyAuditComparisonChecksum(comparison as AuditRetestComparisonRecord),
+		),
+		comparisonOutcomes: summarizeComparisonOutcomes(comparisons as AuditRetestComparisonRecord[]),
 		citationTypes,
 		fixtureSetChecksumLength: latest.fixtureSetChecksum.length,
 		immutableUpdateRejected,
 		immutableClaimLinkUpdateRejected,
 		immutableFindingUpdateRejected,
 		immutableRemediationUpdateRejected,
+		immutableFrozenReportUpdateRejected,
+		immutableComparisonUpdateRejected,
 	};
 	if (
 		verification.providerRuns !== 18 ||
@@ -191,7 +238,16 @@ async function main(): Promise<void> {
 		verification.diagnosisReviewRequired !== 2 ||
 		verification.insufficientEvidenceFindings !== 1 ||
 		verification.repeatedCompetitorAuthorityFindings !== 1 ||
-		verification.fixtureSetChecksumLength !== 64
+		verification.fixtureSetChecksumLength !== 64 ||
+		!verification.frozenReportChecksumVerified ||
+		verification.retestProviderRuns !== 19 ||
+		verification.retestComparisons !== 16 ||
+		!verification.comparisonChecksumsVerified ||
+		verification.comparisonOutcomes.improved !== 5 ||
+		verification.comparisonOutcomes.unchanged !== 5 ||
+		verification.comparisonOutcomes.regressed !== 1 ||
+		verification.comparisonOutcomes.insufficient_evidence !== 2 ||
+		verification.comparisonOutcomes.pending_human_review !== 3
 	) {
 		throw new Error(`Persisted replay evidence is incomplete: ${JSON.stringify(verification)}`);
 	}

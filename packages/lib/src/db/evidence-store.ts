@@ -11,6 +11,7 @@ import {
 	providerResponsePayloads,
 	providerRuns,
 } from "./schema";
+import { eq, inArray } from "drizzle-orm";
 import { db } from "./db";
 import { canonicalJson, type ReplayAuditBundle } from "../replay-audit";
 
@@ -143,4 +144,63 @@ export async function persistReplayAuditBundle(
 	store: ImmutableEvidenceStore = new DrizzleImmutableEvidenceStore(),
 ): Promise<void> {
 	await store.persist(bundle);
+}
+
+/** Loads one complete immutable audit bundle and validates its tenant boundaries. */
+export async function loadPersistedReplayAuditBundle(
+	auditRunId: string,
+	expectedBrandId?: string,
+): Promise<ReplayAuditBundle | null> {
+	const auditRun = await db.query.auditRuns.findFirst({ where: eq(auditRuns.id, auditRunId) });
+	if (!auditRun) return null;
+	if (expectedBrandId && auditRun.brandId !== expectedBrandId)
+		throw new Error("Audit does not belong to the requested brand");
+	const runRows = await db.select().from(providerRuns).where(eq(providerRuns.auditRunId, auditRunId));
+	const runIds = runRows.map((run) => run.id);
+	if (runIds.length === 0) throw new Error("Persisted audit contains no provider runs");
+	const promptIds = uniqueStrings(runRows.map((run) => run.promptVariantId));
+	const providerIds = uniqueStrings(runRows.map((run) => run.providerModelVersionId));
+	const [promptRows, providerRows, responseRows, entityRows, citationRows, findingRows, remediationRows] =
+		await Promise.all([
+			db.select().from(frozenPromptVariants).where(inArray(frozenPromptVariants.id, promptIds)),
+			db.select().from(providerModelVersions).where(inArray(providerModelVersions.id, providerIds)),
+			db.select().from(providerResponsePayloads).where(inArray(providerResponsePayloads.providerRunId, runIds)),
+			db
+				.select()
+				.from(entityIdentityEvidenceRecords)
+				.where(inArray(entityIdentityEvidenceRecords.providerRunId, runIds)),
+			db.select().from(citationEvidenceRecords).where(inArray(citationEvidenceRecords.providerRunId, runIds)),
+			db.select().from(diagnosisFindings).where(eq(diagnosisFindings.auditRunId, auditRunId)),
+			db.select().from(evidenceRemediations).where(eq(evidenceRemediations.auditRunId, auditRunId)),
+		]);
+	const intentIds = uniqueStrings(promptRows.map((prompt) => prompt.intentFamilyId));
+	const intentRows = await db.select().from(intentFamilies).where(inArray(intentFamilies.id, intentIds));
+	if (intentRows.some((intent) => intent.brandId !== auditRun.brandId)) {
+		throw new Error("Cross-tenant intent evidence detected in persisted audit");
+	}
+	const entityIds = entityRows.map((entity) => entity.id);
+	const claimLinkRows = entityIds.length
+		? await db
+				.select()
+				.from(citationClaimEvidenceLinks)
+				.where(inArray(citationClaimEvidenceLinks.entityEvidenceId, entityIds))
+		: [];
+
+	return {
+		intentFamilies: intentRows,
+		promptVariants: promptRows,
+		auditRun,
+		providerModelVersions: providerRows,
+		providerRuns: runRows,
+		responsePayloads: responseRows,
+		citationEvidence: citationRows,
+		entityEvidence: entityRows,
+		citationClaimLinks: claimLinkRows,
+		findings: findingRows,
+		remediations: remediationRows,
+	} as ReplayAuditBundle;
+}
+
+function uniqueStrings(values: string[]): string[] {
+	return [...new Set(values)];
 }

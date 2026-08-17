@@ -6,6 +6,7 @@
   "scripts": {
     "test": "vitest run",
     "replay:baseline": "tsx scripts/replay-baseline.ts",
+    "replay:report": "tsx scripts/replay-audit-report.ts",
     "replay:verify": "tsx scripts/verify-replay-persistence.ts",
     "compare:onboarding": "tsx scripts/compare-onboarding.ts",
     "generate:auth-schema": "bash scripts/generate-auth-schema.sh"
@@ -16,6 +17,7 @@
     "./db/auth-sync": "./src/db/auth-sync.ts",
     "./db/provisioning": "./src/db/provisioning.ts",
     "./db/evidence-store": "./src/db/evidence-store.ts",
+    "./db/audit-report-store": "./src/db/audit-report-store.ts",
     "./auth/server": "./src/auth/server.ts",
     "./auth/client": "./src/auth/client.ts",
     "./auth/permissions": "./src/auth/permissions.ts",
@@ -26,6 +28,7 @@
     "./text-extraction": "./src/text-extraction.ts",
     "./evidence": "./src/evidence.ts",
     "./replay-audit": "./src/replay-audit.ts",
+    "./audit-report": "./src/audit-report.ts",
     "./dataforseo": "./src/dataforseo.ts",
     "./onboarding": "./src/onboarding/index.ts",
     "./tag-utils": "./src/tag-utils.ts",

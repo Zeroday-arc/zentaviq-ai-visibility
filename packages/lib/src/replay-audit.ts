@@ -41,10 +41,11 @@ export const EVIDENCE_CLASSIFIER_ID = "zentaviq-deterministic-evidence-classifie
 export const EVIDENCE_CLASSIFIER_VERSION = "2.0.0";
 export const REPLAY_PROVIDER_ID = "fixture-replay";
 export const REPLAY_MODEL_ID = "zentaviq-replay";
-export const REPLAY_MODEL_VERSION = "v0.1-failure-diagnosis";
+export const REPLAY_MODEL_VERSION = "v0.1-frozen-audit-report";
+export const REPLAY_BENCHMARK_VERSION = "zentaviq-fixture-benchmark-v1";
 export const HUMAN_REVIEW_CONFIDENCE_THRESHOLD = 0.75;
 
-export type AuditRunKind = "baseline" | "audit";
+export type AuditRunKind = "baseline" | "audit" | "retest";
 export type AuditExecutionMode = "fixture_replay" | "live";
 export type RetrievalStatus = "retrieved" | "not_retrieved";
 export type CitationType = "first_party" | "independent" | "competitor" | "unknown";
@@ -109,7 +110,7 @@ export const replayFixtureSchema = z
 			.object({
 				id: z.literal(REPLAY_PROVIDER_ID),
 				model: z.literal(REPLAY_MODEL_ID),
-				version: z.literal(REPLAY_MODEL_VERSION),
+				version: z.string().min(1),
 				metadata: z.record(z.string(), z.string()),
 			})
 			.strict(),
@@ -401,7 +402,7 @@ export function sha256(value: unknown): string {
 	return createHash("sha256").update(canonicalJson(value)).digest("hex");
 }
 
-function deterministicUuid(value: string): string {
+export function deterministicUuid(value: string): string {
 	const hex = createHash("sha256").update(value).digest("hex").slice(0, 32).split("");
 	hex[12] = "5";
 	hex[16] = ((Number.parseInt(hex[16], 16) & 0x3) | 0x8).toString(16);
@@ -450,6 +451,7 @@ function providerMetadata() {
 			source: "bundled_fixture",
 			networkAccess: "disabled",
 			format: "zentaviq-replay-v1",
+			benchmarkVersion: REPLAY_BENCHMARK_VERSION,
 		},
 	} as const;
 }
@@ -1436,24 +1438,28 @@ export function classifyCitationType(url: string, brandDomains: string[], compet
 	return "independent";
 }
 
-export function createReplayAuditBundle(input: ReplayAuditInput): ReplayAuditBundle {
+export function createReplayAuditBundle(
+	input: ReplayAuditInput,
+	options: { fixtures?: ReplayFixture[]; runKind?: AuditRunKind } = {},
+): ReplayAuditBundle {
 	if (!input.correlationId.trim()) throw new Error("A replay correlation ID is required");
 	if (Number.isNaN(input.replayedAt.getTime())) throw new Error("A valid replay timestamp is required");
 
-	const fixtures = createReplayFixtures(input);
+	const fixtures = (options.fixtures ?? createReplayFixtures(input)).map((fixture) =>
+		replayFixtureSchema.parse(fixture),
+	);
+	if (fixtures.length === 0) throw new Error("At least one replay fixture is required");
 	const fixtureSetChecksum = sha256(fixtures);
 	const auditRunId = deterministicUuid(`audit-run:${input.correlationId}`);
-	const configuredIdentities = baseEntityIdentities(input, fixtures[0]);
-	const brandDomains = configuredIdentities
-		.filter((identity) => identity.role === "brand")
-		.flatMap((identity) => identity.domains ?? []);
-	const competitorDomains = configuredIdentities
-		.filter((identity) => identity.role === "competitor")
-		.flatMap((identity) => identity.domains ?? []);
+	const brandDomains = [input.brand.website, ...(input.brand.additionalDomains ?? [])]
+		.map(canonicalDomain)
+		.filter((domain): domain is string => Boolean(domain));
+	const configuredCompetitors = input.competitors.length > 0 ? input.competitors : [effectiveCompetitor(input)];
+	const competitorDomains = configuredCompetitors
+		.flatMap((competitor) => competitor.domains ?? [])
+		.map(canonicalDomain)
+		.filter((domain): domain is string => Boolean(domain));
 	const replayedAt = new Date(input.replayedAt);
-	const providerModelVersionId = deterministicUuid(
-		`provider-model:${REPLAY_PROVIDER_ID}:${REPLAY_MODEL_ID}:${REPLAY_MODEL_VERSION}`,
-	);
 
 	const bundle: ReplayAuditBundle = {
 		intentFamilies: [],
@@ -1461,7 +1467,7 @@ export function createReplayAuditBundle(input: ReplayAuditInput): ReplayAuditBun
 		auditRun: {
 			id: auditRunId,
 			brandId: input.brand.id,
-			runKind: "baseline",
+			runKind: options.runKind ?? "baseline",
 			executionMode: "fixture_replay",
 			schemaVersion: AUDIT_RECORD_SCHEMA_VERSION,
 			correlationId: input.correlationId,
@@ -1470,17 +1476,7 @@ export function createReplayAuditBundle(input: ReplayAuditInput): ReplayAuditBun
 			completedAt: replayedAt,
 			createdAt: replayedAt,
 		},
-		providerModelVersions: [
-			{
-				id: providerModelVersionId,
-				providerId: REPLAY_PROVIDER_ID,
-				modelId: REPLAY_MODEL_ID,
-				modelVersion: REPLAY_MODEL_VERSION,
-				schemaVersion: AUDIT_RECORD_SCHEMA_VERSION,
-				metadata: providerMetadata().metadata,
-				recordedAt: new Date(fixtures[0].capturedAt),
-			},
-		],
+		providerModelVersions: [],
 		providerRuns: [],
 		responsePayloads: [],
 		citationEvidence: [],
@@ -1491,6 +1487,20 @@ export function createReplayAuditBundle(input: ReplayAuditInput): ReplayAuditBun
 	};
 
 	for (const fixture of fixtures) {
+		const providerModelVersionId = deterministicUuid(
+			`provider-model:${fixture.provider.id}:${fixture.provider.model}:${fixture.provider.version}`,
+		);
+		if (!bundle.providerModelVersions.some((provider) => provider.id === providerModelVersionId)) {
+			bundle.providerModelVersions.push({
+				id: providerModelVersionId,
+				providerId: fixture.provider.id,
+				modelId: fixture.provider.model,
+				modelVersion: fixture.provider.version,
+				schemaVersion: AUDIT_RECORD_SCHEMA_VERSION,
+				metadata: fixture.provider.metadata,
+				recordedAt: new Date(fixture.capturedAt),
+			});
+		}
 		const intentFamilyId = deterministicUuid(
 			`intent-family:${AUDIT_RECORD_SCHEMA_VERSION}:${input.brand.id}:${fixture.intent.key}:${fixture.intent.version}`,
 		);

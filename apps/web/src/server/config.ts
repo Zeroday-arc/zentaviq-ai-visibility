@@ -6,6 +6,8 @@ import { getEnvValidationState } from "@workspace/config/env";
 import type { ClientConfig } from "@workspace/config/types";
 import { getDefaultDelayHours } from "@workspace/lib/constants";
 import { countUsers } from "@workspace/lib/db/provisioning";
+import { isResearchProviderConfigured } from "@workspace/lib/onboarding";
+import { filterConfiguredScrapeTargets, getProvider, parseScrapeTargets } from "@workspace/lib/providers";
 import { getDeployment } from "@/lib/config/server";
 
 export type PublicClientConfig = Omit<ClientConfig, "branding"> & {
@@ -26,6 +28,15 @@ const POSTHOG_PUBLIC_KEY = "phc_Jhx9LnI9cTDFHpQmpOzJSDTW127qD9pFU65KRnYym6z";
 function resolvePosthogKey(): string | undefined {
 	if (process.env.DISABLE_TELEMETRY) return undefined;
 	return process.env.VITE_POSTHOG_KEY ?? POSTHOG_PUBLIC_KEY;
+}
+
+function hasConfiguredAuditProvider(): boolean {
+	try {
+		const targets = parseScrapeTargets(process.env.SCRAPE_TARGETS);
+		return filterConfiguredScrapeTargets(targets, getProvider).length > 0;
+	} catch {
+		return false;
+	}
 }
 
 export const getClientConfig = createServerFn({ method: "GET" }).handler(async (): Promise<PublicClientConfig> => {
@@ -51,6 +62,8 @@ export const getClientConfig = createServerFn({ method: "GET" }).handler(async (
 		defaultDelayHours: getDefaultDelayHours(),
 		canRegister,
 		hasUsers,
+		onboardingProviderConfigured: isResearchProviderConfigured(),
+		auditProviderConfigured: hasConfiguredAuditProvider(),
 	};
 });
 

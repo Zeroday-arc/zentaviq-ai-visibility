@@ -112,6 +112,10 @@ export interface ClientConfig {
 	canRegister: boolean;
 	/** Whether any user account exists. */
 	hasUsers: boolean;
+	/** Whether onboarding can run provider-backed brand research. */
+	onboardingProviderConfigured?: boolean;
+	/** Whether at least one configured provider can run scheduled audits. */
+	auditProviderConfigured?: boolean;
 }
 
 // ============================================================================

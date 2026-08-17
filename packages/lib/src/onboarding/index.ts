@@ -8,7 +8,7 @@ export {
 	type OnboardingPrompt,
 	type OnboardingSuggestion,
 } from "./analyze";
-export { runStructuredCompletionPrompt, runStructuredResearchPrompt } from "./llm";
+export { isResearchProviderConfigured, runStructuredCompletionPrompt, runStructuredResearchPrompt } from "./llm";
 export {
 	cleanAndValidateDomain as cleanAndValidateOnboardingDomain,
 	cleanDomain as cleanOnboardingDomain,

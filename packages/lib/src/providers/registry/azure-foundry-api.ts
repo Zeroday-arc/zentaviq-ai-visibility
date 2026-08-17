@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { hasValue } from "@workspace/config/env";
 import type { Provider, ScrapeResult, ProviderOptions, StructuredResearchOptions, StructuredResearchResult } from "../types";
 
 export const azureFoundryApi: Provider = {
@@ -6,7 +7,7 @@ export const azureFoundryApi: Provider = {
     name: "Azure AI Foundry",
 
     isConfigured() {
-        return !!process.env.AZURE_FOUNDRY_API_KEY;                                                                            
+        return hasValue(process.env.AZURE_FOUNDRY_API_KEY) && hasValue(process.env.AZURE_FOUNDRY_BASE_URL);
     },
 
     async run(model: string, prompt: string, options?: ProviderOptions): Promise<ScrapeResult> {

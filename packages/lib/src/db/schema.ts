@@ -1,4 +1,17 @@
-import { pgEnum, pgTable, uuid, text, timestamp, boolean, json, index, integer, smallint } from "drizzle-orm/pg-core";
+import {
+	pgEnum,
+	pgTable,
+	uuid,
+	text,
+	timestamp,
+	boolean,
+	json,
+	jsonb,
+	index,
+	uniqueIndex,
+	integer,
+	smallint,
+} from "drizzle-orm/pg-core";
 
 // Better-auth tables & relations — re-exported so `import * as schema` sees everything.
 // Source file is auto-generated; run `pnpm run generate:auth-schema` to refresh.
@@ -9,6 +22,16 @@ export * from "./schema-auth";
 // ============================================================================
 
 export const reportStatusEnum = pgEnum("report_status", ["pending", "processing", "completed", "failed"]);
+export const auditRunKindEnum = pgEnum("audit_run_kind", ["baseline", "audit"]);
+export const auditExecutionModeEnum = pgEnum("audit_execution_mode", ["fixture_replay", "live"]);
+export const retrievalStatusEnum = pgEnum("retrieval_status", ["retrieved", "not_retrieved"]);
+export const citationEvidenceTypeEnum = pgEnum("citation_evidence_type", [
+	"first_party",
+	"independent",
+	"competitor",
+	"unknown",
+]);
+export const evidenceEntityRoleEnum = pgEnum("evidence_entity_role", ["brand", "competitor"]);
 
 export const brands = pgTable("brands", {
 	id: text("id").primaryKey().notNull(),
@@ -77,7 +100,9 @@ export const promptRuns = pgTable(
 		promptId: uuid("prompt_id")
 			.references(() => prompts.id)
 			.notNull(),
-		brandId: text("brand_id").references(() => brands.id).notNull(),
+		brandId: text("brand_id")
+			.references(() => brands.id)
+			.notNull(),
 		model: text("model").notNull(),
 		provider: text("provider"),
 		version: text("version").notNull(),
@@ -92,7 +117,11 @@ export const promptRuns = pgTable(
 		promptIdCreatedAtIdx: index("prompt_runs_prompt_id_created_at_idx").on(table.promptId, table.createdAt),
 		createdAtIdx: index("prompt_runs_created_at_idx").on(table.createdAt),
 		webSearchCreatedAtIdx: index("prompt_runs_web_search_created_at_idx").on(table.webSearchEnabled, table.createdAt),
-		webSearchModelCreatedAtIdx: index("prompt_runs_web_search_model_created_at_idx").on(table.webSearchEnabled, table.model, table.createdAt),
+		webSearchModelCreatedAtIdx: index("prompt_runs_web_search_model_created_at_idx").on(
+			table.webSearchEnabled,
+			table.model,
+			table.createdAt,
+		),
 		providerIdx: index("prompt_runs_provider_idx").on(table.provider),
 		modelCreatedAtIdx: index("prompt_runs_model_created_at_idx").on(table.model, table.createdAt),
 	}),
@@ -119,9 +148,247 @@ export const citations = pgTable(
 		createdAt: timestamp("created_at", { withTimezone: true }).notNull(),
 	},
 	(table) => ({
-		brandAnalyticsIdx: index("idx_citations_brand_analytics").on(table.brandId, table.createdAt, table.url, table.domain, table.title, table.promptId, table.model),
+		brandAnalyticsIdx: index("idx_citations_brand_analytics").on(
+			table.brandId,
+			table.createdAt,
+			table.url,
+			table.domain,
+			table.title,
+			table.promptId,
+			table.model,
+		),
 		promptCreatedIdx: index("citations_prompt_id_created_at_idx").on(table.promptId, table.createdAt),
 		domainIdx: index("citations_domain_idx").on(table.domain),
+	}),
+).enableRLS();
+
+// ============================================================================
+// Canonical immutable audit evidence
+// ============================================================================
+
+/**
+ * Versioned intent definition. Records are append-only: a changed intent gets
+ * a new version instead of mutating the definition used by historical runs.
+ */
+export const intentFamilies = pgTable(
+	"intent_families",
+	{
+		id: uuid("id").primaryKey().notNull(),
+		brandId: text("brand_id")
+			.references(() => brands.id, { onDelete: "cascade" })
+			.notNull(),
+		key: text("key").notNull(),
+		name: text("name").notNull(),
+		description: text("description").notNull(),
+		schemaVersion: integer("schema_version").notNull(),
+		version: integer("version").notNull(),
+		createdAt: timestamp("created_at", { withTimezone: true }).notNull(),
+	},
+	(table) => ({
+		brandKeyVersionUnique: uniqueIndex("intent_families_brand_key_version_unique").on(
+			table.brandId,
+			table.key,
+			table.version,
+		),
+		brandCreatedIdx: index("intent_families_brand_created_at_idx").on(table.brandId, table.createdAt),
+	}),
+).enableRLS();
+
+/** A prompt string frozen exactly as executed for a versioned intent. */
+export const frozenPromptVariants = pgTable(
+	"frozen_prompt_variants",
+	{
+		id: uuid("id").primaryKey().notNull(),
+		intentFamilyId: uuid("intent_family_id")
+			.references(() => intentFamilies.id, { onDelete: "cascade" })
+			.notNull(),
+		sourcePromptId: uuid("source_prompt_id").references(() => prompts.id, { onDelete: "set null" }),
+		promptText: text("prompt_text").notNull(),
+		promptChecksum: text("prompt_checksum").notNull(),
+		schemaVersion: integer("schema_version").notNull(),
+		version: integer("version").notNull(),
+		frozenAt: timestamp("frozen_at", { withTimezone: true }).notNull(),
+		createdAt: timestamp("created_at", { withTimezone: true }).notNull(),
+	},
+	(table) => ({
+		intentVersionUnique: uniqueIndex("frozen_prompt_variants_intent_version_unique").on(
+			table.intentFamilyId,
+			table.version,
+		),
+		checksumIdx: index("frozen_prompt_variants_checksum_idx").on(table.promptChecksum),
+	}),
+).enableRLS();
+
+/** A completed immutable baseline or audit envelope. */
+export const auditRuns = pgTable(
+	"audit_runs",
+	{
+		id: uuid("id").primaryKey().notNull(),
+		brandId: text("brand_id")
+			.references(() => brands.id, { onDelete: "cascade" })
+			.notNull(),
+		runKind: auditRunKindEnum("run_kind").notNull(),
+		executionMode: auditExecutionModeEnum("execution_mode").notNull(),
+		schemaVersion: integer("schema_version").notNull(),
+		correlationId: text("correlation_id").notNull(),
+		fixtureSetChecksum: text("fixture_set_checksum").notNull(),
+		startedAt: timestamp("started_at", { withTimezone: true }).notNull(),
+		completedAt: timestamp("completed_at", { withTimezone: true }).notNull(),
+		createdAt: timestamp("created_at", { withTimezone: true }).notNull(),
+	},
+	(table) => ({
+		correlationUnique: uniqueIndex("audit_runs_correlation_id_unique").on(table.correlationId),
+		brandCompletedIdx: index("audit_runs_brand_completed_at_idx").on(table.brandId, table.completedAt),
+	}),
+).enableRLS();
+
+/** Canonical provider/model/version identity referenced by individual runs. */
+export const providerModelVersions = pgTable(
+	"provider_model_versions",
+	{
+		id: uuid("id").primaryKey().notNull(),
+		providerId: text("provider_id").notNull(),
+		modelId: text("model_id").notNull(),
+		modelVersion: text("model_version").notNull(),
+		schemaVersion: integer("schema_version").notNull(),
+		metadata: jsonb("metadata").$type<Record<string, string>>().notNull(),
+		recordedAt: timestamp("recorded_at", { withTimezone: true }).notNull(),
+	},
+	(table) => ({
+		identityUnique: uniqueIndex("provider_model_versions_identity_unique").on(
+			table.providerId,
+			table.modelId,
+			table.modelVersion,
+			table.schemaVersion,
+		),
+	}),
+).enableRLS();
+
+/** One provider execution for one frozen prompt variant. */
+export const providerRuns = pgTable(
+	"provider_runs",
+	{
+		id: uuid("id").primaryKey().notNull(),
+		auditRunId: uuid("audit_run_id")
+			.references(() => auditRuns.id, { onDelete: "cascade" })
+			.notNull(),
+		promptVariantId: uuid("prompt_variant_id")
+			.references(() => frozenPromptVariants.id, { onDelete: "cascade" })
+			.notNull(),
+		providerModelVersionId: uuid("provider_model_version_id")
+			.references(() => providerModelVersions.id)
+			.notNull(),
+		schemaVersion: integer("schema_version").notNull(),
+		executionMode: auditExecutionModeEnum("execution_mode").notNull(),
+		retrievalStatus: retrievalStatusEnum("retrieval_status").notNull(),
+		correlationId: text("correlation_id").notNull(),
+		extractorId: text("extractor_id").notNull(),
+		extractorVersion: text("extractor_version").notNull(),
+		startedAt: timestamp("started_at", { withTimezone: true }).notNull(),
+		completedAt: timestamp("completed_at", { withTimezone: true }).notNull(),
+		createdAt: timestamp("created_at", { withTimezone: true }).notNull(),
+	},
+	(table) => ({
+		correlationUnique: uniqueIndex("provider_runs_correlation_id_unique").on(table.correlationId),
+		auditIdx: index("provider_runs_audit_run_id_idx").on(table.auditRunId),
+		promptIdx: index("provider_runs_prompt_variant_id_idx").on(table.promptVariantId),
+	}),
+).enableRLS();
+
+/** Raw provider response retained byte-for-byte as canonical JSON. */
+export const providerResponsePayloads = pgTable(
+	"provider_response_payloads",
+	{
+		id: uuid("id").primaryKey().notNull(),
+		providerRunId: uuid("provider_run_id")
+			.references(() => providerRuns.id, { onDelete: "cascade" })
+			.notNull(),
+		schemaVersion: integer("schema_version").notNull(),
+		fixtureId: text("fixture_id").notNull(),
+		fixtureChecksum: text("fixture_checksum").notNull(),
+		payloadChecksum: text("payload_checksum").notNull(),
+		rawPayload: jsonb("raw_payload").$type<unknown>().notNull(),
+		fixtureCapturedAt: timestamp("fixture_captured_at", { withTimezone: true }).notNull(),
+		replayedAt: timestamp("replayed_at", { withTimezone: true }).notNull(),
+		createdAt: timestamp("created_at", { withTimezone: true }).notNull(),
+	},
+	(table) => ({
+		providerRunUnique: uniqueIndex("provider_response_payloads_provider_run_unique").on(table.providerRunId),
+		fixtureChecksumIdx: index("provider_response_payloads_fixture_checksum_idx").on(
+			table.fixtureId,
+			table.fixtureChecksum,
+		),
+	}),
+).enableRLS();
+
+/** Citation extraction output with source classification and exact provenance. */
+export const citationEvidenceRecords = pgTable(
+	"citation_evidence_records",
+	{
+		id: uuid("id").primaryKey().notNull(),
+		providerRunId: uuid("provider_run_id")
+			.references(() => providerRuns.id, { onDelete: "cascade" })
+			.notNull(),
+		responsePayloadId: uuid("response_payload_id")
+			.references(() => providerResponsePayloads.id, { onDelete: "cascade" })
+			.notNull(),
+		schemaVersion: integer("schema_version").notNull(),
+		correlationId: text("correlation_id").notNull(),
+		citationIndex: integer("citation_index").notNull(),
+		citationType: citationEvidenceTypeEnum("citation_type").notNull(),
+		originalUrl: text("original_url").notNull(),
+		normalizedUrl: text("normalized_url"),
+		normalizedDomain: text("normalized_domain"),
+		title: text("title"),
+		extractorId: text("extractor_id").notNull(),
+		extractorVersion: text("extractor_version").notNull(),
+		evidence: jsonb("evidence").$type<unknown>().notNull(),
+		extractedAt: timestamp("extracted_at", { withTimezone: true }).notNull(),
+	},
+	(table) => ({
+		providerIndexUnique: uniqueIndex("citation_evidence_provider_index_unique").on(
+			table.providerRunId,
+			table.citationIndex,
+		),
+		correlationUnique: uniqueIndex("citation_evidence_correlation_id_unique").on(table.correlationId),
+		domainIdx: index("citation_evidence_normalized_domain_idx").on(table.normalizedDomain),
+	}),
+).enableRLS();
+
+/** Per-entity retrieval, mention, recommendation, citation, and match evidence. */
+export const entityIdentityEvidenceRecords = pgTable(
+	"entity_identity_evidence_records",
+	{
+		id: uuid("id").primaryKey().notNull(),
+		providerRunId: uuid("provider_run_id")
+			.references(() => providerRuns.id, { onDelete: "cascade" })
+			.notNull(),
+		responsePayloadId: uuid("response_payload_id")
+			.references(() => providerResponsePayloads.id, { onDelete: "cascade" })
+			.notNull(),
+		schemaVersion: integer("schema_version").notNull(),
+		correlationId: text("correlation_id").notNull(),
+		entityId: text("entity_id").notNull(),
+		entityRole: evidenceEntityRoleEnum("entity_role").notNull(),
+		identityVersion: integer("identity_version").notNull(),
+		retrieved: boolean("retrieved").notNull(),
+		mentioned: boolean("mentioned").notNull(),
+		recommended: boolean("recommended").notNull(),
+		cited: boolean("cited").notNull(),
+		extractorId: text("extractor_id").notNull(),
+		extractorVersion: text("extractor_version").notNull(),
+		identitySnapshot: jsonb("identity_snapshot").$type<unknown>().notNull(),
+		matchEvidence: jsonb("match_evidence").$type<unknown>().notNull(),
+		recommendationEvidence: jsonb("recommendation_evidence").$type<unknown>().notNull(),
+		extractedAt: timestamp("extracted_at", { withTimezone: true }).notNull(),
+	},
+	(table) => ({
+		providerEntityUnique: uniqueIndex("entity_identity_evidence_provider_entity_unique").on(
+			table.providerRunId,
+			table.entityId,
+		),
+		correlationUnique: uniqueIndex("entity_identity_evidence_correlation_unique").on(table.correlationId),
+		providerIdx: index("entity_identity_evidence_provider_run_idx").on(table.providerRunId),
 	}),
 ).enableRLS();
 
@@ -189,6 +456,23 @@ export type BrandWithPrompts = Brand & {
 
 export type CitationRecord = typeof citations.$inferSelect;
 export type NewCitationRecord = typeof citations.$inferInsert;
+
+export type IntentFamily = typeof intentFamilies.$inferSelect;
+export type NewIntentFamily = typeof intentFamilies.$inferInsert;
+export type FrozenPromptVariant = typeof frozenPromptVariants.$inferSelect;
+export type NewFrozenPromptVariant = typeof frozenPromptVariants.$inferInsert;
+export type AuditRun = typeof auditRuns.$inferSelect;
+export type NewAuditRun = typeof auditRuns.$inferInsert;
+export type ProviderModelVersion = typeof providerModelVersions.$inferSelect;
+export type NewProviderModelVersion = typeof providerModelVersions.$inferInsert;
+export type ProviderRun = typeof providerRuns.$inferSelect;
+export type NewProviderRun = typeof providerRuns.$inferInsert;
+export type ProviderResponsePayload = typeof providerResponsePayloads.$inferSelect;
+export type NewProviderResponsePayload = typeof providerResponsePayloads.$inferInsert;
+export type CitationEvidenceRecord = typeof citationEvidenceRecords.$inferSelect;
+export type NewCitationEvidenceRecord = typeof citationEvidenceRecords.$inferInsert;
+export type EntityIdentityEvidenceRecord = typeof entityIdentityEvidenceRecords.$inferSelect;
+export type NewEntityIdentityEvidenceRecord = typeof entityIdentityEvidenceRecords.$inferInsert;
 
 export type Report = typeof reports.$inferSelect;
 export type NewReport = typeof reports.$inferInsert;

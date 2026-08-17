@@ -1,4 +1,5 @@
 import { bdclient } from "@brightdata/sdk";
+import { hasValue } from "@workspace/config/env";
 import type { Provider, ScrapeResult, ProviderOptions, ModelConfig } from "../types";
 import type { Citation } from "../../text-extraction";
 import { WEB_QUERIES_UNAVAILABLE } from "../../constants";
@@ -102,7 +103,7 @@ export const brightdata: Provider = {
 	name: "BrightData",
 
 	isConfigured() {
-		return !!process.env.BRIGHTDATA_API_TOKEN;
+		return hasValue(process.env.BRIGHTDATA_API_TOKEN);
 	},
 
 	validateTarget(config: ModelConfig) {

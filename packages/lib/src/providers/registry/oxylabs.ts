@@ -1,4 +1,5 @@
 import type { Provider, ScrapeResult, ProviderOptions, ModelConfig } from "../types";
+import { hasValue } from "@workspace/config/env";
 import {
 	extractTextFromOxylabs,
 	extractCitationsFromOxylabs,
@@ -40,7 +41,7 @@ export const oxylabs: Provider = {
 	name: "Oxylabs",
 
 	isConfigured() {
-		return !!process.env.OXYLABS_USERNAME && !!process.env.OXYLABS_PASSWORD;
+		return hasValue(process.env.OXYLABS_USERNAME) && hasValue(process.env.OXYLABS_PASSWORD);
 	},
 
 	validateTarget(config: ModelConfig) {

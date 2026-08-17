@@ -5,6 +5,8 @@
   "license": "MIT",
   "scripts": {
     "test": "vitest run",
+    "replay:baseline": "tsx scripts/replay-baseline.ts",
+    "replay:verify": "tsx scripts/verify-replay-persistence.ts",
     "compare:onboarding": "tsx scripts/compare-onboarding.ts",
     "generate:auth-schema": "bash scripts/generate-auth-schema.sh"
   },
@@ -13,6 +15,7 @@
     "./db/schema": "./src/db/schema.ts",
     "./db/auth-sync": "./src/db/auth-sync.ts",
     "./db/provisioning": "./src/db/provisioning.ts",
+    "./db/evidence-store": "./src/db/evidence-store.ts",
     "./auth/server": "./src/auth/server.ts",
     "./auth/client": "./src/auth/client.ts",
     "./auth/permissions": "./src/auth/permissions.ts",
@@ -22,6 +25,7 @@
     "./location-languages": "./src/location-languages.ts",
     "./text-extraction": "./src/text-extraction.ts",
     "./evidence": "./src/evidence.ts",
+    "./replay-audit": "./src/replay-audit.ts",
     "./dataforseo": "./src/dataforseo.ts",
     "./onboarding": "./src/onboarding/index.ts",
     "./tag-utils": "./src/tag-utils.ts",

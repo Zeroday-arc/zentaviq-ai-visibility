@@ -102,11 +102,6 @@ export async function getAnalyzeBrandStatus(brandId: string): Promise<AnalyzeBra
 		return { status: "done", suggestion: job.output as OnboardingSuggestion };
 	}
 	if (job.state === "failed" || job.state === "cancelled") {
-		console.error("[analyze-brand] job ended without a result", {
-			brandId,
-			jobId: job.id,
-			state: job.state,
-		});
 		return { status: "failed", error: GENERIC_FAILURE };
 	}
 	return { status: "pending" };

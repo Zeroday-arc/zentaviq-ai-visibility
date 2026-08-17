@@ -10,10 +10,29 @@ export interface MissingEnvVar {
 	description?: string;
 }
 
+const PLACEHOLDER_VALUES = new Set([
+	"change_me",
+	"changeme",
+	"insert_key_here",
+	"placeholder",
+	"replace_me",
+	"your_api_key_here",
+	"your_key_here",
+	"your_token_here",
+]);
+
 /**
- * Check if an environment variable has a non-empty value
+ * Check if an environment variable has a real value rather than a setup
+ * placeholder. Keeping this check shared prevents provider probes and startup
+ * validation from disagreeing about whether a credential is configured.
  */
-export const hasValue = (value: string | undefined): boolean => typeof value === "string" && value.trim().length > 0;
+export const hasValue = (value: string | undefined): boolean => {
+	if (typeof value !== "string") return false;
+	const normalized = value.trim().toLowerCase();
+	if (!normalized) return false;
+	if (PLACEHOLDER_VALUES.has(normalized)) return false;
+	return !(normalized.startsWith("<") && normalized.endsWith(">"));
+};
 
 /**
  * Create a requirement checker that requires all specified keys to have values
@@ -84,7 +103,10 @@ function buildProviderKeyRequirements(env: EnvMap = process.env): EnvRequirement
 }
 
 export const ENV_REQUIREMENTS: Record<DeploymentMode, EnvRequirement[]> = {
-	local: [...buildStaticRequirements("local"), ...buildProviderKeyRequirements()],
+	// Provider credentials are optional in local development. The web UI can
+	// still run registration and dashboard flows, while provider-backed work is
+	// disabled until a real credential is configured.
+	local: buildStaticRequirements("local"),
 	demo: [...buildStaticRequirements("demo"), ...buildProviderKeyRequirements()],
 	whitelabel: [...buildStaticRequirements("whitelabel"), ...buildProviderKeyRequirements()],
 	cloud: [], // todo

@@ -101,6 +101,15 @@ export function resolveResearchProvider(env: Record<string, string | undefined> 
 	throw new Error(`Onboarding requires at least one direct LLM API provider. ${ONBOARDING_LLM_TARGET_HELP}`);
 }
 
+export function isResearchProviderConfigured(env: Record<string, string | undefined> = process.env): boolean {
+	try {
+		resolveResearchProvider(env);
+		return true;
+	} catch {
+		return false;
+	}
+}
+
 /**
  * Run a research prompt and return a Zod-validated structured response. The
  * heavy lifting (web search, structured outputs, retry) lives inside each

@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { hasValue } from "@workspace/config/env";
 import type {
 	Provider,
 	ScrapeResult,
@@ -74,7 +75,7 @@ export const openrouter: Provider = {
 	name: "OpenRouter",
 
 	isConfigured() {
-		return !!process.env.OPENROUTER_API_KEY;
+		return hasValue(process.env.OPENROUTER_API_KEY);
 	},
 
 	async runStructuredResearch<T>({

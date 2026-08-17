@@ -191,19 +191,13 @@ export function normalizeAnalysisResult(raw: RawSuggestion, ctx: AnalysisContext
 }
 
 export async function analyzeBrand(options: AnalyzeBrandOptions): Promise<OnboardingSuggestion> {
-	const start = Date.now();
-	console.log(`[onboarding] analyzeBrand start: ${options.website}`);
 	const ctx = await buildAnalysisContext(options);
 	
 	// The user requested web search to be ON so it can find aliases and additional domains,
 	// even though it will take ~15 seconds instead of 3 seconds.
 	const raw = await runStructuredResearchPrompt(ctx.prompt, ctx.schema);
 	
-	const result = normalizeAnalysisResult(raw, ctx);
-	console.log(
-		`[onboarding] analyzeBrand done: ${options.website} in ${Date.now() - start}ms (brand="${result.brandName}", competitors=${result.competitors.length}, prompts=${result.suggestedPrompts.length})`,
-	);
-	return result;
+	return normalizeAnalysisResult(raw, ctx);
 }
 
 /** Normalize an LLM-supplied tag to lowercase kebab-case. */
@@ -368,9 +362,6 @@ export interface OnboardingBrandInfo {
 }
 
 export async function analyzeBrandInfo(options: { website: string; brandName?: string }): Promise<OnboardingBrandInfo> {
-	const start = Date.now();
-	console.log(`[onboarding] analyzeBrandInfo start: ${options.website}`);
-
 	const normalizedWebsite = cleanDomain(options.website);
 	if (!normalizedWebsite) throw new Error(`Could not parse website "${options.website}"`);
 	
@@ -399,10 +390,6 @@ You MUST return the structured JSON object — even if you can find nothing abou
 
 	const dedupedAdditionalDomains = uniqueLowercase(additionalDomains);
 	const aliases = filterRedundantAliases(uniqueTrim(raw.aliases ?? []), brandName);
-
-	console.log(
-		`[onboarding] analyzeBrandInfo done: ${options.website} in ${Date.now() - start}ms (brand="${brandName}")`,
-	);
 
 	return {
 		brandName,
@@ -435,9 +422,6 @@ export async function analyzeCompetitors(options: {
 	brandName: string;
 	maxCompetitors?: number;
 }): Promise<OnboardingCompetitorsInfo> {
-	const start = Date.now();
-	console.log(`[onboarding] analyzeCompetitors start: ${options.website}`);
-
 	const maxCompetitors = options.maxCompetitors ?? DEFAULT_MAX_COMPETITORS;
 	if (maxCompetitors <= 0) return { competitors: [] };
 
@@ -477,10 +461,6 @@ Identify direct competitors that sell similar products or services. Use web sear
 		});
 	}
 
-	console.log(
-		`[onboarding] analyzeCompetitors done: ${options.website} in ${Date.now() - start}ms (found ${competitors.length})`,
-	);
-
 	return { competitors };
 }
 
@@ -508,9 +488,6 @@ export async function analyzePrompts(options: {
 	competitorNames?: string[];
 	maxPrompts?: number;
 }): Promise<OnboardingPromptsInfo> {
-	const start = Date.now();
-	console.log(`[onboarding] analyzePrompts start: ${options.website}`);
-
 	const maxPrompts = options.maxPrompts ?? DEFAULT_MAX_PROMPTS;
 	if (maxPrompts <= 0) return { suggestedPrompts: [] };
 
@@ -542,10 +519,6 @@ Identify a starter set of AI tracking prompts to monitor this brand's visibility
 		const tags = uniqueLowercase((p.tags ?? []).map(toKebabCase).filter(Boolean)).slice(0, 3);
 		suggestedPrompts.push({ prompt: value, tags });
 	}
-
-	console.log(
-		`[onboarding] analyzePrompts done: ${options.website} in ${Date.now() - start}ms (found ${suggestedPrompts.length})`,
-	);
 
 	return { suggestedPrompts };
 }

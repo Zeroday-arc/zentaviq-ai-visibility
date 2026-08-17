@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { parseScrapeTargets, validateScrapeTargets } from "./config";
+import { filterConfiguredScrapeTargets, parseScrapeTargets, validateScrapeTargets } from "./config";
 import { brightdata } from "./registry/brightdata";
 import { oxylabs } from "./registry/oxylabs";
 import { dataforseo } from "./registry/dataforseo";
@@ -177,6 +177,23 @@ describe("validateScrapeTargets", () => {
 				}),
 			),
 		).not.toThrow();
+	});
+});
+
+describe("filterConfiguredScrapeTargets", () => {
+	it("keeps only targets backed by configured providers", () => {
+		const configs = [
+			{ model: "chatgpt", provider: "openai-api", webSearch: false },
+			{ model: "gemini", provider: "olostep", webSearch: true },
+		];
+		const getProvider = (id: string) => ({ isConfigured: () => id === "olostep" });
+
+		expect(filterConfiguredScrapeTargets(configs, getProvider)).toEqual([configs[1]]);
+	});
+
+	it("drops unknown providers without allowing a job to reach them", () => {
+		const configs = [{ model: "chatgpt", provider: "unknown", webSearch: false }];
+		expect(filterConfiguredScrapeTargets(configs, () => undefined)).toEqual([]);
 	});
 });
 

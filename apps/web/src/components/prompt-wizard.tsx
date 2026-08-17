@@ -5,9 +5,10 @@
  * and edits before saving. Replaces the prior 4-step wizard that required
  * DataForSEO + Anthropic in tandem.
  */
-import { useState, useCallback, useEffect, memo, useMemo, useRef } from "react";
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { useRouter } from "@tanstack/react-router";
+import { useState, useCallback, useEffect, memo, useMemo } from "react";
+import { useMutation, useQueryClient } from "@tanstack/react-query";
+import { useRouteContext, useRouter } from "@tanstack/react-router";
+import type { ClientConfig } from "@workspace/config/types";
 import { Button } from "@workspace/ui/components/button";
 import { Input } from "@workspace/ui/components/input";
 import { Textarea } from "@workspace/ui/components/textarea";
@@ -87,6 +88,8 @@ export default function PromptWizard({ onComplete }: PromptWizardProps) {
 	const { brand } = useBrand();
 	const queryClient = useQueryClient();
 	const router = useRouter();
+	const routeContext = useRouteContext({ strict: false }) as { clientConfig?: ClientConfig };
+	const providerConfigured = routeContext.clientConfig?.onboardingProviderConfigured ?? false;
 	const STORAGE_KEY = brand?.id ? `getcito_onboarding_${brand.id}` : null;
 
 	const [phase, setPhase] = useState<"idle" | "analyzing" | "review">(() => {
@@ -232,22 +235,12 @@ export default function PromptWizard({ onComplete }: PromptWizardProps) {
 		});
 	}, [brand, data.website, data.brandName, data.competitors, enqueuePromptsAnalysis]);
 
-	const hasAutoAnalyzed = useRef(false);
-
 	// Synchronize form progress to localStorage so hard refreshes don't lose data
 	useEffect(() => {
 		if (STORAGE_KEY && phase === "review") {
 			localStorage.setItem(STORAGE_KEY, JSON.stringify(data));
 		}
 	}, [data, phase, STORAGE_KEY]);
-
-	// Auto-start analysis when component mounts
-	useEffect(() => {
-		if (phase === "idle" && !hasAutoAnalyzed.current && brand?.website && brand?.id) {
-			hasAutoAnalyzed.current = true;
-			handleAnalyze();
-		}
-	}, [brand?.website, brand?.id, phase, handleAnalyze]);
 
 	// Update phase state to respect isAnalyzingBrand
 	useEffect(() => {
@@ -349,7 +342,48 @@ export default function PromptWizard({ onComplete }: PromptWizardProps) {
 		}
 	}, [brand, data, queryClient, router, onComplete]);
 
-	if (phase === "idle" || phase === "analyzing") {
+	if (phase === "idle") {
+		return (
+			<div className="max-w-2xl mx-auto space-y-6">
+				<div className="space-y-2">
+					<h2 className="text-2xl font-bold">Set up {brand?.name || "your brand"}</h2>
+					<p className="text-muted-foreground text-balance">
+						Automatic analysis is optional. You can review the brand manually or continue directly to the dashboard.
+					</p>
+				</div>
+				{!providerConfigured && (
+					<div className="flex items-start gap-3 rounded-lg border border-amber-200 bg-amber-50 p-4 text-amber-900 dark:border-amber-900 dark:bg-amber-950/40 dark:text-amber-100">
+						<AlertCircle className="h-5 w-5 flex-shrink-0 mt-0.5" />
+						<div className="space-y-1 text-sm">
+							<p className="font-medium">AI provider not configured</p>
+							<p>Automatic brand analysis is unavailable. No provider request will be made.</p>
+						</div>
+					</div>
+				)}
+				{error && (
+					<div className="flex items-start gap-2 rounded-md border border-red-200 bg-red-50 p-3 text-sm text-red-800 dark:border-red-900 dark:bg-red-950/40 dark:text-red-200">
+						<AlertCircle className="h-4 w-4 flex-shrink-0 mt-0.5" />
+						<span>{error}</span>
+					</div>
+				)}
+				<div className="flex flex-wrap gap-3">
+					{providerConfigured && (
+						<Button onClick={handleAnalyze} className="flex items-center gap-2">
+							<Play className="h-4 w-4" /> Analyze brand
+						</Button>
+					)}
+					<Button variant="outline" onClick={() => setPhase("review")}>
+						Set up manually
+					</Button>
+					<Button variant={providerConfigured ? "ghost" : "default"} onClick={handleSubmit} disabled={isSaving}>
+						{isSaving ? "Opening dashboard…" : "Continue to dashboard"}
+					</Button>
+				</div>
+			</div>
+		);
+	}
+
+	if (phase === "analyzing") {
 		return (
 			<div className="max-w-2xl mx-auto space-y-6">
 				<div className="space-y-2">
@@ -384,6 +418,15 @@ export default function PromptWizard({ onComplete }: PromptWizardProps) {
 
 	return (
 		<div className="max-w-2xl mx-auto space-y-6">
+			{!providerConfigured && (
+				<div className="flex items-start gap-3 rounded-lg border border-amber-200 bg-amber-50 p-4 text-amber-900 dark:border-amber-900 dark:bg-amber-950/40 dark:text-amber-100">
+					<AlertCircle className="h-5 w-5 flex-shrink-0 mt-0.5" />
+					<div className="space-y-1 text-sm">
+						<p className="font-medium">AI provider not configured</p>
+						<p>You can enter details manually and finish setup without making a provider request.</p>
+					</div>
+				</div>
+			)}
 			<div className="space-y-2">
 				<div className="flex items-center gap-4">
 					<WebLogo domain={data.website} size={48} />
@@ -475,7 +518,7 @@ export default function PromptWizard({ onComplete }: PromptWizardProps) {
 						variant="outline"
 						size="sm"
 						onClick={handleAnalyzeCompetitors}
-						disabled={isAnalyzingCompetitors || isSaving}
+						disabled={!providerConfigured || isAnalyzingCompetitors || isSaving}
 					>
 						{isAnalyzingCompetitors ? (
 							<>
@@ -503,7 +546,7 @@ export default function PromptWizard({ onComplete }: PromptWizardProps) {
 						variant="outline"
 						size="sm"
 						onClick={handleAnalyzePrompts}
-						disabled={isAnalyzingPrompts || isSaving}
+						disabled={!providerConfigured || isAnalyzingPrompts || isSaving}
 					>
 						{isAnalyzingPrompts ? (
 							<>
@@ -526,7 +569,7 @@ export default function PromptWizard({ onComplete }: PromptWizardProps) {
 
 			<Button
 				onClick={handleSubmit}
-				disabled={isSaving || previewCounts.totalNew === 0}
+				disabled={isSaving}
 				className="flex items-center gap-2 cursor-pointer"
 			>
 				{isSaving ? (
@@ -535,7 +578,10 @@ export default function PromptWizard({ onComplete }: PromptWizardProps) {
 					</>
 				) : (
 					<>
-						<Rocket className="h-4 w-4" /> Start tracking ({previewCounts.totalNew} new prompts)
+						<Rocket className="h-4 w-4" />
+						{previewCounts.totalNew > 0
+							? `Start tracking (${previewCounts.totalNew} new prompts)`
+							: "Finish setup"}
 					</>
 				)}
 			</Button>

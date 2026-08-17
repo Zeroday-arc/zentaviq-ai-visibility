@@ -1,5 +1,10 @@
 import * as Sentry from "@sentry/node";
-import { getProvider, parseScrapeTargets, validateScrapeTargets } from "@workspace/lib/providers";
+import {
+	filterConfiguredScrapeTargets,
+	getProvider,
+	parseScrapeTargets,
+	validateScrapeTargets,
+} from "@workspace/lib/providers";
 import boss from "./boss";
 import { registerHandlers } from "./handlers";
 import { shutdownTelemetry } from "./telemetry";
@@ -17,8 +22,16 @@ async function main() {
 
 	// Fail fast on misconfigured SCRAPE_TARGETS — surfaces unknown providers,
 	// missing API keys, and per-provider target errors before any job runs.
-	validateScrapeTargets(parseScrapeTargets(process.env.SCRAPE_TARGETS), getProvider);
-	console.log("SCRAPE_TARGETS validated");
+	const scrapeTargets = parseScrapeTargets(process.env.SCRAPE_TARGETS);
+	const configuredTargets = filterConfiguredScrapeTargets(scrapeTargets, getProvider);
+	if (process.env.DEPLOYMENT_MODE === "local") {
+		validateScrapeTargets(configuredTargets, getProvider);
+		if (configuredTargets.length === 0) {
+			console.warn("No AI provider is configured; provider-backed background work is disabled");
+		}
+	} else {
+		validateScrapeTargets(scrapeTargets, getProvider);
+	}
 
 	boss.on("error", (error) => {
 		console.error("pg-boss error:", error);

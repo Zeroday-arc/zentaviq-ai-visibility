@@ -1,5 +1,6 @@
 import Anthropic from "@anthropic-ai/sdk";
 import { anthropic, createAnthropic } from "@ai-sdk/anthropic";
+import { hasValue } from "@workspace/config/env";
 import { generateText, Output } from "ai";
 import { extractTextFromAnthropic } from "../../text-extraction";
 import type {
@@ -142,7 +143,7 @@ export const anthropicApi: Provider = {
 	name: "Anthropic API",
 
 	isConfigured() {
-		return !!process.env.ANTHROPIC_API_KEY;
+		return hasValue(process.env.ANTHROPIC_API_KEY);
 	},
 
 	async run(model: string, prompt: string, options?: ProviderOptions): Promise<ScrapeResult> {

@@ -1,4 +1,5 @@
 import * as client from "dataforseo-client";
+import { hasValue } from "@workspace/config/env";
 import { WEB_QUERIES_UNAVAILABLE } from "../../constants";
 import { DATAFORSEO_LANGUAGES } from "../../languages";
 import {
@@ -246,7 +247,7 @@ export const dataforseo: Provider = {
 	name: "DataForSEO",
 
 	isConfigured() {
-		return !!process.env.DATAFORSEO_LOGIN && !!process.env.DATAFORSEO_PASSWORD;
+		return hasValue(process.env.DATAFORSEO_LOGIN) && hasValue(process.env.DATAFORSEO_PASSWORD);
 	},
 
 	validateTarget(config: ModelConfig) {

@@ -4,6 +4,7 @@ import { brands, citations, competitors, promptRuns, prompts, type Brand, type C
 import { eq } from "drizzle-orm";
 import { RUNS_PER_PROMPT, getDefaultDelayHours } from "@workspace/lib/constants";
 import {
+	filterConfiguredScrapeTargets,
 	getProvider,
 	parseScrapeTargets,
 	selectTargetsForBrand,
@@ -208,7 +209,6 @@ async function runModelIteration({
 	competitorsList,
 	config,
 	providerImpl,
-	runIndex,
 }: {
 	promptId: string;
 	promptValue: string;
@@ -216,10 +216,7 @@ async function runModelIteration({
 	competitorsList: Competitor[];
 	config: ModelConfig;
 	providerImpl: Provider;
-	runIndex: number;
 }): Promise<void> {
-	const logPrefix = `[${config.model}_${runIndex}]`;
-
 	const result = await providerImpl.run(config.model, promptValue, {
 		webSearch: config.webSearch,
 		version: config.version,
@@ -233,7 +230,6 @@ async function runModelIteration({
 	// providers whose query field is fabricated (DataForSEO) write the
 	// `unavailable` sentinel in their own extractor instead.
 	const { rawOutput, textContent, webQueries, citations: extractedCitations, modelVersion } = result;
-	console.log(`${logPrefix} AI call completed, textContent length: ${textContent?.length ?? "null"}`);
 
 	const safeTextContent = typeof textContent === "string" ? textContent : "";
 
@@ -253,7 +249,6 @@ async function runModelIteration({
 		brandMentioned,
 		competitorsMentioned,
 	);
-	console.log(`${logPrefix} Saved prompt run ${promptRunId}`);
 
 	await saveCitations(promptRunId, promptId, brand.id, config.model, extractedCitations, createdAt);
 }
@@ -264,7 +259,11 @@ async function runModelIteration({
  * After successful completion, schedules the next run.
  */
 export async function processPromptJob(jobs: Job<ProcessPromptData>[]): Promise<void> {
-	const scrapeConfigs = parseScrapeTargets(process.env.SCRAPE_TARGETS);
+	const scrapeConfigs = filterConfiguredScrapeTargets(
+		parseScrapeTargets(process.env.SCRAPE_TARGETS),
+		getProvider,
+	);
+	if (scrapeConfigs.length === 0) return;
 
 	// pg-boss v12 passes an array of jobs - process each one
 	for (const job of jobs) {
@@ -312,7 +311,6 @@ export async function processPromptJob(jobs: Job<ProcessPromptData>[]): Promise<
 						competitorsList,
 						config,
 						providerImpl,
-						runIndex: i + 1,
 					}),
 				);
 			}

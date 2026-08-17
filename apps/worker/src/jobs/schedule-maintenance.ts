@@ -1,7 +1,7 @@
 import { getDefaultDelayHours } from "@workspace/lib/constants";
 import { db } from "@workspace/lib/db/db";
 import { brands, promptRuns, prompts } from "@workspace/lib/db/schema";
-import { parseScrapeTargets } from "@workspace/lib/providers";
+import { filterConfiguredScrapeTargets, getProvider, parseScrapeTargets } from "@workspace/lib/providers";
 import { and, eq, inArray, sql } from "drizzle-orm";
 import type { Job } from "pg-boss";
 import boss from "../boss";
@@ -32,6 +32,12 @@ export async function scheduleMaintenanceJob(jobs: Job<ScheduleMaintenanceData>[
 }
 
 async function runMaintenanceCheck(): Promise<void> {
+	const allModels = filterConfiguredScrapeTargets(
+		parseScrapeTargets(process.env.SCRAPE_TARGETS),
+		getProvider,
+	);
+	if (allModels.length === 0) return;
+
 	// Get all enabled brands
 	const enabledBrands = await db.query.brands.findMany({
 		where: eq(brands.enabled, true),
@@ -61,7 +67,6 @@ async function runMaintenanceCheck(): Promise<void> {
 
 	console.log(`[schedule-maintenance] Checking ${enabledPrompts.length} enabled prompts`);
 
-	const allModels = parseScrapeTargets(process.env.SCRAPE_TARGETS);
 	const modelNames = allModels.map((cfg) => cfg.model);
 
 	// Get last runs per prompt per model (matches dashboard overdue logic)

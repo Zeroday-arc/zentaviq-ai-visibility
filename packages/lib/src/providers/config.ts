@@ -4,6 +4,19 @@ import type { ModelConfig } from "./types";
 // of truth, shared with the CLI); re-exported here for compatibility.
 export { parseScrapeTargets } from "@workspace/config/scrape-targets";
 
+export function filterConfiguredScrapeTargets(
+	configs: ModelConfig[],
+	getProvider: (id: string) => { isConfigured(): boolean } | undefined,
+): ModelConfig[] {
+	return configs.filter((config) => {
+		try {
+			return getProvider(config.provider)?.isConfigured() ?? false;
+		} catch {
+			return false;
+		}
+	});
+}
+
 export function validateScrapeTargets(
 	configs: ModelConfig[],
 	getProvider: (id: string) => { isConfigured(): boolean; validateTarget?(config: ModelConfig): string | null } | undefined,

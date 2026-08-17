@@ -2,7 +2,12 @@ import { db } from "@workspace/lib/db/db";
 import { reports, type Brand, brands, competitors as competitorsSchema, prompts as promptsSchema, promptRuns as promptRunsSchema } from "@workspace/lib/db/schema";
 import { eq, desc } from "drizzle-orm";
 import { RUNS_PER_PROMPT } from "@workspace/lib/constants";
-import { getProvider, parseScrapeTargets, type ModelConfig } from "@workspace/lib/providers";
+import {
+	filterConfiguredScrapeTargets,
+	getProvider,
+	parseScrapeTargets,
+	type ModelConfig,
+} from "@workspace/lib/providers";
 import { analyzeBrand } from "@workspace/lib/onboarding";
 import { isPromptBranded, computeSystemTags } from "@workspace/lib/tag-utils";
 
@@ -271,7 +276,13 @@ export async function processReportJob(job: ReportJobContext) {
 
 	job.log(`Processing report ID: ${reportId} for brand: ${brandName}`);
 
-	const scrapeConfigs = parseScrapeTargets(process.env.SCRAPE_TARGETS);
+	const scrapeConfigs = filterConfiguredScrapeTargets(
+		parseScrapeTargets(process.env.SCRAPE_TARGETS),
+		getProvider,
+	);
+	if (scrapeConfigs.length === 0) {
+		throw new Error("AI provider is not configured. Configure a provider before generating a report.");
+	}
 
 	// Determine if we're using manual prompts
 	const useManualPrompts = manualPrompts && manualPrompts.length > 0;

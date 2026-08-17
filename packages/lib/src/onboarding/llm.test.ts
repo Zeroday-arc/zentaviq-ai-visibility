@@ -102,5 +102,14 @@ describe("resolveResearchProvider", () => {
 	it("throws when no provider is configured", () => {
 		expect(() => resolveResearchProvider({})).toThrow(/at least one direct LLM API/);
 	});
+
+	it("treats placeholder credentials as unconfigured", () => {
+		process.env.OPENAI_API_KEY = "your_api_key_here";
+		process.env.OPENROUTER_API_KEY = "replace_me";
+		process.env.ANTHROPIC_API_KEY = "<api-key>";
+		process.env.MISTRAL_API_KEY = "placeholder";
+
+		expect(() => resolveResearchProvider()).toThrow(/at least one direct LLM API/);
+	});
 });
 

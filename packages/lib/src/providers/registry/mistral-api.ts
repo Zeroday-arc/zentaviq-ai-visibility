@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { hasValue } from "@workspace/config/env";
 import type {
 	Provider,
 	ScrapeResult,
@@ -83,7 +84,7 @@ export const mistralApi: Provider = {
 	name: "Mistral API",
 
 	isConfigured() {
-		return !!process.env.MISTRAL_API_KEY;
+		return hasValue(process.env.MISTRAL_API_KEY);
 	},
 
 	async run(model: string, prompt: string, options?: ProviderOptions): Promise<ScrapeResult> {

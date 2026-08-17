@@ -1,6 +1,7 @@
 import * as Sentry from "@sentry/node";
 import type { Job, PgBoss } from "pg-boss";
 import type { OnboardingSuggestion } from "@workspace/lib/onboarding";
+import { isResearchProviderConfigured } from "@workspace/lib/onboarding";
 import { processPromptJob, type ProcessPromptData } from "./jobs/process-prompt";
 import { generateReportJob, type GenerateReportData } from "./jobs/generate-report";
 import { scheduleMaintenanceJob, type ScheduleMaintenanceData } from "./jobs/schedule-maintenance";
@@ -48,12 +49,14 @@ export async function registerHandlers(boss: PgBoss): Promise<void> {
 
 	// batchSize: 1 keeps the returned suggestion mapped 1:1 to a single job's
 	// output, which the web app reads back via getJobById.
-	await boss.work<AnalyzeBrandData, OnboardingSuggestion>(
-		"analyze-brand",
-		{ batchSize: 1, localConcurrency: 2 },
-		withSentry("analyze-brand", analyzeBrandJob),
-	);
-	console.log("Registered handler: analyze-brand");
+	if (isResearchProviderConfigured()) {
+		await boss.work<AnalyzeBrandData, OnboardingSuggestion>(
+			"analyze-brand",
+			{ batchSize: 1, localConcurrency: 2 },
+			withSentry("analyze-brand", analyzeBrandJob),
+		);
+		console.log("Registered handler: analyze-brand");
+	}
 
 	await boss.work<ScheduleMaintenanceData>(
 		"schedule-maintenance",

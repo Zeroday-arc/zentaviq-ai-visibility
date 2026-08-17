@@ -1,4 +1,5 @@
 import Olostep from "olostep";
+import { hasValue } from "@workspace/config/env";
 import type { Provider, ScrapeResult, ProviderOptions, ModelConfig } from "../types";
 import type { Citation } from "../../text-extraction";
 import { WEB_QUERIES_UNAVAILABLE } from "../../constants";
@@ -126,7 +127,7 @@ export const olostep: Provider = {
 	name: "Olostep",
 
 	isConfigured() {
-		return !!process.env.OLOSTEP_API_KEY;
+		return hasValue(process.env.OLOSTEP_API_KEY);
 	},
 
 	validateTarget(config: ModelConfig) {

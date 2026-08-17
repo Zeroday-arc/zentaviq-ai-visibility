@@ -1,4 +1,5 @@
 import { openai, createOpenAI } from "@ai-sdk/openai";
+import { hasValue } from "@workspace/config/env";
 import { generateText, Output } from "ai";
 import { extractTextFromOpenAI, extractCitationsFromOpenAI } from "../../text-extraction";
 import type {
@@ -62,7 +63,7 @@ export const openaiApi: Provider = {
 	name: "OpenAI API",
 
 	isConfigured() {
-		return !!process.env.OPENAI_API_KEY;
+		return hasValue(process.env.OPENAI_API_KEY);
 	},
 
 	async run(model: string, prompt: string, options?: ProviderOptions): Promise<ScrapeResult> {

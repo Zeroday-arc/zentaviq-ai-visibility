@@ -11,9 +11,21 @@ function metric(value: number | boolean | null): string {
 	return String(value);
 }
 
+function printCompleteReport(): void {
+	const details = [...document.querySelectorAll<HTMLDetailsElement>("[data-customer-audit-report] details")];
+	const previouslyOpen = new Set(details.filter((detail) => detail.open));
+	for (const detail of details) detail.open = true;
+	window.print();
+	for (const detail of details) detail.open = previouslyOpen.has(detail);
+}
+
 export function CustomerAuditReport({ report }: { report: CustomerAuditReportView }) {
 	return (
-		<section className="space-y-5 rounded-lg border bg-background p-4 print:border-0 print:p-0" aria-label="Customer audit report">
+		<section
+			data-customer-audit-report
+			className="space-y-5 rounded-lg border bg-background p-4 print:border-0 print:p-0"
+			aria-label="Customer audit report"
+		>
 			<header className="flex flex-wrap items-start justify-between gap-3 border-b pb-4">
 				<div className="space-y-1">
 					<div className="flex items-center gap-2">
@@ -24,7 +36,7 @@ export function CustomerAuditReport({ report }: { report: CustomerAuditReportVie
 						{report.business.name} · frozen evidence baseline versus deterministic fixture retest
 					</p>
 				</div>
-				<Button type="button" variant="outline" size="sm" className="print:hidden" onClick={() => window.print()}>
+				<Button type="button" variant="outline" size="sm" className="print:hidden" onClick={printCompleteReport}>
 					<IconPrinter className="mr-2 h-4 w-4" /> Print report
 				</Button>
 			</header>
@@ -104,6 +116,17 @@ export function CustomerAuditReport({ report }: { report: CustomerAuditReportVie
 							{result.intentName} · {result.comparison ? label(result.comparison.outcome) : "baseline frozen"}
 						</summary>
 						<div className="mt-3 space-y-3 text-xs">
+							<div className="rounded border p-2">
+								<p className="font-medium">Frozen prompts</p>
+								<ul className="mt-1 space-y-1 text-muted-foreground">
+									{result.prompts.map((prompt) => (
+										<li key={prompt.id}>
+											v{prompt.version}: “{prompt.text}”
+											<span className="ml-1 break-all text-[10px]">({prompt.checksum})</span>
+										</li>
+									))}
+								</ul>
+							</div>
 							<div className="grid gap-2 md:grid-cols-2">
 								<div className="rounded bg-muted/40 p-2">
 									<p className="font-medium">Observed baseline evidence</p>
@@ -187,7 +210,6 @@ export function CustomerAuditReport({ report }: { report: CustomerAuditReportVie
 									<p className="text-muted-foreground">
 										Independent {winner.citationTypeCounts.independent} · competitor-owned{" "}
 										{winner.citationTypeCounts.competitor} · first-party {winner.citationTypeCounts.first_party} · unknown{" "}
-										{winner.citationTypeCounts.unknown}. No cited URL is prescribed for acquisition.
 									</p>
 								</div>
 							))}

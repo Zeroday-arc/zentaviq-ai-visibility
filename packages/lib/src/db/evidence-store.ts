@@ -1,3 +1,6 @@
+import { eq, inArray } from "drizzle-orm";
+import { canonicalJson, type ReplayAuditBundle } from "../replay-audit";
+import { db } from "./db";
 import {
 	auditRuns,
 	citationClaimEvidenceLinks,
@@ -11,12 +14,98 @@ import {
 	providerResponsePayloads,
 	providerRuns,
 } from "./schema";
-import { eq, inArray } from "drizzle-orm";
-import { db } from "./db";
-import { canonicalJson, type ReplayAuditBundle } from "../replay-audit";
 
 export interface ImmutableEvidenceStore {
 	persist(bundle: ReplayAuditBundle): Promise<void>;
+}
+
+type EvidenceTransaction = Parameters<Parameters<typeof db.transaction>[0]>[0];
+type EvidenceRecord = { id: string };
+
+function assertCanonicalRows(collection: string, expected: EvidenceRecord[], persisted: EvidenceRecord[]): void {
+	if (persisted.length !== expected.length) {
+		throw new Error(`Not all immutable evidence was persisted for ${collection}`);
+	}
+	const expectedById = new Map(expected.map((record) => [record.id, canonicalJson(record)]));
+	for (const record of persisted) {
+		if (expectedById.get(record.id) !== canonicalJson(record)) {
+			throw new Error(`Immutable evidence conflict for ${collection}:${record.id}`);
+		}
+	}
+}
+
+export async function persistReplayAuditBundleInTransaction(
+	tx: EvidenceTransaction,
+	bundle: ReplayAuditBundle,
+): Promise<void> {
+	if (bundle.intentFamilies.length > 0) {
+		await tx.insert(intentFamilies).values(bundle.intentFamilies).onConflictDoNothing();
+	}
+	if (bundle.promptVariants.length > 0) {
+		await tx.insert(frozenPromptVariants).values(bundle.promptVariants).onConflictDoNothing();
+	}
+	if (bundle.providerModelVersions.length > 0) {
+		await tx.insert(providerModelVersions).values(bundle.providerModelVersions).onConflictDoNothing();
+	}
+	await tx.insert(auditRuns).values(bundle.auditRun).onConflictDoNothing();
+	if (bundle.providerRuns.length > 0) await tx.insert(providerRuns).values(bundle.providerRuns).onConflictDoNothing();
+	if (bundle.responsePayloads.length > 0)
+		await tx.insert(providerResponsePayloads).values(bundle.responsePayloads).onConflictDoNothing();
+	if (bundle.entityEvidence.length > 0)
+		await tx.insert(entityIdentityEvidenceRecords).values(bundle.entityEvidence).onConflictDoNothing();
+	if (bundle.citationEvidence.length > 0)
+		await tx.insert(citationEvidenceRecords).values(bundle.citationEvidence).onConflictDoNothing();
+	if (bundle.citationClaimLinks.length > 0)
+		await tx.insert(citationClaimEvidenceLinks).values(bundle.citationClaimLinks).onConflictDoNothing();
+	if (bundle.findings.length > 0) await tx.insert(diagnosisFindings).values(bundle.findings).onConflictDoNothing();
+	if (bundle.remediations.length > 0)
+		await tx.insert(evidenceRemediations).values(bundle.remediations).onConflictDoNothing();
+
+	const selectIds = async <T extends EvidenceRecord>(
+		collection: string,
+		table: Parameters<EvidenceTransaction["select"]>[0] extends never ? never : unknown,
+		idColumn: unknown,
+		expected: T[],
+	): Promise<void> => {
+		if (expected.length === 0) return;
+		const rows = await tx
+			.select()
+			.from(table as typeof intentFamilies)
+			.where(
+				inArray(
+					idColumn as typeof intentFamilies.id,
+					expected.map((record) => record.id),
+				),
+			);
+		assertCanonicalRows(collection, expected, rows as EvidenceRecord[]);
+	};
+
+	await selectIds("intentFamilies", intentFamilies, intentFamilies.id, bundle.intentFamilies);
+	await selectIds("promptVariants", frozenPromptVariants, frozenPromptVariants.id, bundle.promptVariants);
+	await selectIds(
+		"providerModelVersions",
+		providerModelVersions,
+		providerModelVersions.id,
+		bundle.providerModelVersions,
+	);
+	await selectIds("auditRuns", auditRuns, auditRuns.id, [bundle.auditRun]);
+	await selectIds("providerRuns", providerRuns, providerRuns.id, bundle.providerRuns);
+	await selectIds("responsePayloads", providerResponsePayloads, providerResponsePayloads.id, bundle.responsePayloads);
+	await selectIds(
+		"entityEvidence",
+		entityIdentityEvidenceRecords,
+		entityIdentityEvidenceRecords.id,
+		bundle.entityEvidence,
+	);
+	await selectIds("citationEvidence", citationEvidenceRecords, citationEvidenceRecords.id, bundle.citationEvidence);
+	await selectIds(
+		"citationClaimLinks",
+		citationClaimEvidenceLinks,
+		citationClaimEvidenceLinks.id,
+		bundle.citationClaimLinks,
+	);
+	await selectIds("findings", diagnosisFindings, diagnosisFindings.id, bundle.findings);
+	await selectIds("remediations", evidenceRemediations, evidenceRemediations.id, bundle.remediations);
 }
 
 /**
@@ -27,42 +116,10 @@ export interface ImmutableEvidenceStore {
 export class DrizzleImmutableEvidenceStore implements ImmutableEvidenceStore {
 	async persist(bundle: ReplayAuditBundle): Promise<void> {
 		await db.transaction(async (tx) => {
-			if (bundle.intentFamilies.length > 0) {
-				await tx.insert(intentFamilies).values(bundle.intentFamilies).onConflictDoNothing();
-			}
-			if (bundle.promptVariants.length > 0) {
-				await tx.insert(frozenPromptVariants).values(bundle.promptVariants).onConflictDoNothing();
-			}
-			if (bundle.providerModelVersions.length > 0) {
-				await tx.insert(providerModelVersions).values(bundle.providerModelVersions).onConflictDoNothing();
-			}
-			await tx.insert(auditRuns).values(bundle.auditRun).onConflictDoNothing();
-			if (bundle.providerRuns.length > 0) {
-				await tx.insert(providerRuns).values(bundle.providerRuns).onConflictDoNothing();
-			}
-			if (bundle.responsePayloads.length > 0) {
-				await tx.insert(providerResponsePayloads).values(bundle.responsePayloads).onConflictDoNothing();
-			}
-			if (bundle.entityEvidence.length > 0) {
-				await tx.insert(entityIdentityEvidenceRecords).values(bundle.entityEvidence).onConflictDoNothing();
-			}
-			if (bundle.citationEvidence.length > 0) {
-				await tx.insert(citationEvidenceRecords).values(bundle.citationEvidence).onConflictDoNothing();
-			}
-			if (bundle.citationClaimLinks.length > 0) {
-				await tx.insert(citationClaimEvidenceLinks).values(bundle.citationClaimLinks).onConflictDoNothing();
-			}
-			if (bundle.findings.length > 0) {
-				await tx.insert(diagnosisFindings).values(bundle.findings).onConflictDoNothing();
-			}
-			if (bundle.remediations.length > 0) {
-				await tx.insert(evidenceRemediations).values(bundle.remediations).onConflictDoNothing();
-			}
+			await persistReplayAuditBundleInTransaction(tx, bundle);
 		});
 	}
 }
-
-type EvidenceRecord = { id: string };
 
 /** In-memory append-only store used to prove deterministic persistence. */
 export class InMemoryImmutableEvidenceStore implements ImmutableEvidenceStore {

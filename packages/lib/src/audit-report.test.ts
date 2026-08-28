@@ -9,7 +9,8 @@ import {
 	verifyAuditComparisonChecksum,
 	verifyFrozenAuditReportChecksum,
 } from "./audit-report";
-import { canonicalJson, createReplayAuditBundle, sha256, type ReplayAuditInput } from "./replay-audit";
+import { assertCompleteComparisonSet } from "./db/audit-report-store";
+import { canonicalJson, createReplayAuditBundle, type ReplayAuditInput, sha256 } from "./replay-audit";
 
 const input: ReplayAuditInput = {
 	brand: {
@@ -213,6 +214,14 @@ describe("frozen audit report and deterministic retest", () => {
 		);
 	});
 
+	it("rejects partial or duplicate comparison sets as incomplete", () => {
+		const { frozenReport, comparisons } = createFlow();
+		const expected = frozenReport.decisionSnapshot.map((decision) => decision.intentFamilyId);
+		expect(() => assertCompleteComparisonSet(comparisons, expected)).not.toThrow();
+		expect(() => assertCompleteComparisonSet(comparisons.slice(1), expected)).toThrow("incomplete");
+		expect(() => assertCompleteComparisonSet([...comparisons, comparisons[0]], expected)).toThrow("duplicate");
+	});
+
 	it("rejects cross-tenant report and comparison linkage", () => {
 		const baseline = createReplayAuditBundle(input);
 		expect(() =>
@@ -223,5 +232,33 @@ describe("frozen audit report and deterministic retest", () => {
 				frozenAt: new Date("2026-08-18T01:00:00.000Z"),
 			}),
 		).toThrow("Baseline brand does not match");
+		expect(() =>
+			createFrozenAuditReport({
+				baseline,
+				brand: { ...input.brand, name: "Wrong identity version" },
+				competitors: input.competitors,
+				frozenAt: new Date("2026-08-18T01:00:00.000Z"),
+			}),
+		).toThrow("Baseline evidence identity does not match");
+	});
+
+	it("rejects retests against a changed frozen business identity", () => {
+		const { frozenReport } = createFlow();
+		expect(() =>
+			createDeterministicRetestBundle({
+				frozenReport,
+				brand: { ...input.brand, name: "A different brand version" },
+				competitors: input.competitors,
+				retestedAt: new Date("2026-08-18T02:00:00.000Z"),
+			}),
+		).toThrow("business identity does not match");
+		expect(() =>
+			createDeterministicRetestBundle({
+				frozenReport,
+				brand: input.brand,
+				competitors: [{ ...input.competitors[0], domains: ["wrong-business.example"] }],
+				retestedAt: new Date("2026-08-18T02:00:00.000Z"),
+			}),
+		).toThrow("business identity does not match");
 	});
 });

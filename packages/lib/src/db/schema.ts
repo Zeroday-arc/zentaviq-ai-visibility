@@ -1,17 +1,17 @@
 import {
-	pgEnum,
-	pgTable,
-	uuid,
-	text,
-	timestamp,
 	boolean,
+	index,
+	integer,
 	json,
 	jsonb,
-	index,
-	uniqueIndex,
-	integer,
-	smallint,
+	pgEnum,
+	pgTable,
 	real,
+	smallint,
+	text,
+	timestamp,
+	uniqueIndex,
+	uuid,
 } from "drizzle-orm/pg-core";
 
 // Better-auth tables & relations — re-exported so `import * as schema` sees everything.
@@ -235,7 +235,7 @@ export const intentFamilies = pgTable(
 	{
 		id: uuid("id").primaryKey().notNull(),
 		brandId: text("brand_id")
-			.references(() => brands.id, { onDelete: "cascade" })
+			.references(() => brands.id, { onDelete: "no action" })
 			.notNull(),
 		key: text("key").notNull(),
 		name: text("name").notNull(),
@@ -260,7 +260,7 @@ export const frozenPromptVariants = pgTable(
 	{
 		id: uuid("id").primaryKey().notNull(),
 		intentFamilyId: uuid("intent_family_id")
-			.references(() => intentFamilies.id, { onDelete: "cascade" })
+			.references(() => intentFamilies.id, { onDelete: "no action" })
 			.notNull(),
 		sourcePromptId: uuid("source_prompt_id").references(() => prompts.id, { onDelete: "set null" }),
 		promptText: text("prompt_text").notNull(),
@@ -285,7 +285,7 @@ export const auditRuns = pgTable(
 	{
 		id: uuid("id").primaryKey().notNull(),
 		brandId: text("brand_id")
-			.references(() => brands.id, { onDelete: "cascade" })
+			.references(() => brands.id, { onDelete: "no action" })
 			.notNull(),
 		runKind: auditRunKindEnum("run_kind").notNull(),
 		executionMode: auditExecutionModeEnum("execution_mode").notNull(),
@@ -330,10 +330,10 @@ export const providerRuns = pgTable(
 	{
 		id: uuid("id").primaryKey().notNull(),
 		auditRunId: uuid("audit_run_id")
-			.references(() => auditRuns.id, { onDelete: "cascade" })
+			.references(() => auditRuns.id, { onDelete: "no action" })
 			.notNull(),
 		promptVariantId: uuid("prompt_variant_id")
-			.references(() => frozenPromptVariants.id, { onDelete: "cascade" })
+			.references(() => frozenPromptVariants.id, { onDelete: "no action" })
 			.notNull(),
 		providerModelVersionId: uuid("provider_model_version_id")
 			.references(() => providerModelVersions.id)
@@ -361,7 +361,7 @@ export const providerResponsePayloads = pgTable(
 	{
 		id: uuid("id").primaryKey().notNull(),
 		providerRunId: uuid("provider_run_id")
-			.references(() => providerRuns.id, { onDelete: "cascade" })
+			.references(() => providerRuns.id, { onDelete: "no action" })
 			.notNull(),
 		schemaVersion: integer("schema_version").notNull(),
 		fixtureId: text("fixture_id").notNull(),
@@ -387,10 +387,10 @@ export const citationEvidenceRecords = pgTable(
 	{
 		id: uuid("id").primaryKey().notNull(),
 		providerRunId: uuid("provider_run_id")
-			.references(() => providerRuns.id, { onDelete: "cascade" })
+			.references(() => providerRuns.id, { onDelete: "no action" })
 			.notNull(),
 		responsePayloadId: uuid("response_payload_id")
-			.references(() => providerResponsePayloads.id, { onDelete: "cascade" })
+			.references(() => providerResponsePayloads.id, { onDelete: "no action" })
 			.notNull(),
 		schemaVersion: integer("schema_version").notNull(),
 		correlationId: text("correlation_id").notNull(),
@@ -421,10 +421,10 @@ export const entityIdentityEvidenceRecords = pgTable(
 	{
 		id: uuid("id").primaryKey().notNull(),
 		providerRunId: uuid("provider_run_id")
-			.references(() => providerRuns.id, { onDelete: "cascade" })
+			.references(() => providerRuns.id, { onDelete: "no action" })
 			.notNull(),
 		responsePayloadId: uuid("response_payload_id")
-			.references(() => providerResponsePayloads.id, { onDelete: "cascade" })
+			.references(() => providerResponsePayloads.id, { onDelete: "no action" })
 			.notNull(),
 		schemaVersion: integer("schema_version").notNull(),
 		correlationId: text("correlation_id").notNull(),
@@ -461,10 +461,10 @@ export const citationClaimEvidenceLinks = pgTable(
 	{
 		id: uuid("id").primaryKey().notNull(),
 		citationEvidenceId: uuid("citation_evidence_id")
-			.references(() => citationEvidenceRecords.id, { onDelete: "cascade" })
+			.references(() => citationEvidenceRecords.id, { onDelete: "no action" })
 			.notNull(),
 		entityEvidenceId: uuid("entity_evidence_id")
-			.references(() => entityIdentityEvidenceRecords.id, { onDelete: "cascade" })
+			.references(() => entityIdentityEvidenceRecords.id, { onDelete: "no action" })
 			.notNull(),
 		schemaVersion: integer("schema_version").notNull(),
 		correlationId: text("correlation_id").notNull(),
@@ -497,7 +497,7 @@ export const diagnosisFindings = pgTable(
 	{
 		id: uuid("id").primaryKey().notNull(),
 		auditRunId: uuid("audit_run_id")
-			.references(() => auditRuns.id, { onDelete: "cascade" })
+			.references(() => auditRuns.id, { onDelete: "no action" })
 			.notNull(),
 		intentFamilyId: uuid("intent_family_id")
 			.references(() => intentFamilies.id)
@@ -540,10 +540,10 @@ export const evidenceRemediations = pgTable(
 	{
 		id: uuid("id").primaryKey().notNull(),
 		auditRunId: uuid("audit_run_id")
-			.references(() => auditRuns.id, { onDelete: "cascade" })
+			.references(() => auditRuns.id, { onDelete: "no action" })
 			.notNull(),
 		primaryFindingId: uuid("primary_finding_id")
-			.references(() => diagnosisFindings.id, { onDelete: "cascade" })
+			.references(() => diagnosisFindings.id, { onDelete: "no action" })
 			.notNull(),
 		linkedFindingIds: uuid("linked_finding_ids").array().notNull(),
 		schemaVersion: integer("schema_version").notNull(),
@@ -575,7 +575,7 @@ export const frozenAuditReports = pgTable(
 	{
 		id: uuid("id").primaryKey().notNull(),
 		brandId: text("brand_id")
-			.references(() => brands.id, { onDelete: "cascade" })
+			.references(() => brands.id, { onDelete: "no action" })
 			.notNull(),
 		baselineAuditRunId: uuid("baseline_audit_run_id")
 			.references(() => auditRuns.id)
@@ -617,7 +617,7 @@ export const auditRetestComparisons = pgTable(
 	{
 		id: uuid("id").primaryKey().notNull(),
 		brandId: text("brand_id")
-			.references(() => brands.id, { onDelete: "cascade" })
+			.references(() => brands.id, { onDelete: "no action" })
 			.notNull(),
 		frozenReportId: uuid("frozen_report_id")
 			.references(() => frozenAuditReports.id)

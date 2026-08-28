@@ -5,10 +5,10 @@ import {
 	classifyCitationType,
 	createReplayAuditBundle,
 	createReplayFixtures,
-	sha256,
-	summarizeReplayAudit,
 	type EntityIdentityEvidenceRecord,
 	type ReplayAuditInput,
+	sha256,
+	summarizeReplayAudit,
 } from "./replay-audit";
 
 const input: ReplayAuditInput = {
@@ -219,6 +219,44 @@ describe("fixture replay audit", () => {
 			reasonCodes: ["citation_domain_not_owned_by_entity", "proximity_does_not_establish_support"],
 		});
 		expect(unrelatedTarget.cited).toBe(false);
+	});
+
+	it("scopes recommendation polarity to the entity occurrence", () => {
+		const fixture = structuredClone(createReplayFixtures(input)[0]);
+		fixture.fixtureId = "recommendation-negation-regression-v1";
+		fixture.payload = {
+			schemaVersion: 3,
+			retrieved: true,
+			responseText: "I recommend Ledger Labs, not Zentaviq.",
+			citations: [],
+		};
+		const bundle = createReplayAuditBundle(input, { fixtures: [fixture] });
+		const target = entityForFixture(bundle, fixture.fixtureId, "brand:brand-zentaviq");
+		const competitor = entityForFixture(bundle, fixture.fixtureId, "competitor:00000000-0000-4000-8000-000000000001");
+		expect(target).toMatchObject({ recommended: false });
+		expect(target.recommendationEvidence).toMatchObject({
+			status: "rejected",
+			rule: "same_sentence_negated_recommendation_cue",
+		});
+		expect(competitor).toMatchObject({ recommended: true });
+	});
+
+	it("routes conflicting positive and negated occurrences to review", () => {
+		const fixture = structuredClone(createReplayFixtures(input)[0]);
+		fixture.fixtureId = "recommendation-conflict-regression-v1";
+		fixture.payload = {
+			schemaVersion: 3,
+			retrieved: true,
+			responseText: "I recommend Zentaviq. I do not recommend Zentaviq for this case.",
+			citations: [],
+		};
+		const bundle = createReplayAuditBundle(input, { fixtures: [fixture] });
+		const target = entityForFixture(bundle, fixture.fixtureId, "brand:brand-zentaviq");
+		expect(target).toMatchObject({ recommended: false, reviewState: "pending" });
+		expect(target.recommendationEvidence).toMatchObject({
+			status: "ambiguous",
+			rule: "conflicting_recommendation_occurrences",
+		});
 	});
 
 	it("classifies first-party, competitor, and independent citations without fetching them", () => {

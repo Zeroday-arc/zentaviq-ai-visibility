@@ -1,29 +1,22 @@
 import { createHash } from "node:crypto";
 import { z } from "zod";
 import {
+	type DiagnosisFindingRecord,
+	type DiagnosisResult,
+	diagnoseReplayEvidence,
+	type RemediationRecord,
+} from "./diagnosis";
+import {
+	type CitationEvidenceV1,
 	classifyEntities,
 	createUnverifiedCitationEvidence,
 	ENTITY_CLASSIFIER_ID,
 	ENTITY_CLASSIFIER_VERSION,
-	normalizeHttpUrl,
-	type CitationEvidenceV1,
 	type EntityClassification,
 	type EntityIdentityInput,
+	normalizeHttpUrl,
 } from "./evidence";
-import {
-	diagnoseReplayEvidence,
-	type DiagnosisFindingRecord,
-	type DiagnosisResult,
-	type RemediationRecord,
-} from "./diagnosis";
 
-export {
-	DIAGNOSIS_CLASSIFIER_ID,
-	DIAGNOSIS_CLASSIFIER_VERSION,
-	DIAGNOSIS_RECORD_SCHEMA_VERSION,
-	MINIMUM_REPEATED_EVIDENCE_RUNS,
-	REMEDIATION_POLICY_VERSION,
-} from "./diagnosis";
 export type {
 	CompetitorCitationGapWinner,
 	DiagnosisEvidenceSummary,
@@ -31,6 +24,13 @@ export type {
 	LikelyFailureStage,
 	RemediationActionCategory,
 	RemediationRecord,
+} from "./diagnosis";
+export {
+	DIAGNOSIS_CLASSIFIER_ID,
+	DIAGNOSIS_CLASSIFIER_VERSION,
+	DIAGNOSIS_RECORD_SCHEMA_VERSION,
+	MINIMUM_REPEATED_EVIDENCE_RUNS,
+	REMEDIATION_POLICY_VERSION,
 } from "./diagnosis";
 
 export const AUDIT_RECORD_SCHEMA_VERSION = 2 as const;
@@ -935,17 +935,26 @@ function sentenceBounds(content: string, offset: number): { start: number; end: 
 
 function recommendationFor(content: string, classification: EntityClassification): RecommendationEvidence {
 	const eligibleMatches = classification.acceptedMatches.filter((match) => match.source !== "domain");
+	const decisions: RecommendationEvidence[] = [];
 	for (const entityMatch of eligibleMatches) {
 		const sentence = sentenceBounds(content, entityMatch.start);
 		const sentenceText = content.slice(sentence.start, sentence.end);
 		const cuePattern = /\b(?:recommend(?:ed|s|ing)?|top choice|best option)\b/giu;
-		for (const cueMatch of sentenceText.matchAll(cuePattern)) {
+		const cueMatches = [...sentenceText.matchAll(cuePattern)];
+		const nearestCue = cueMatches
+			.map((cueMatch) => ({ cueMatch, distance: Math.abs(sentence.start + (cueMatch.index ?? 0) - entityMatch.start) }))
+			.sort((left, right) => left.distance - right.distance)[0]?.cueMatch;
+		for (const cueMatch of nearestCue ? [nearestCue] : []) {
 			const relativeStart = cueMatch.index ?? 0;
 			const cueStart = sentence.start + relativeStart;
 			const cue = cueMatch[0];
 			const preceding = content.slice(Math.max(sentence.start, cueStart - 24), cueStart);
-			if (/\b(?:not|never|avoid|cannot|can't|do not|don't)\b/iu.test(preceding)) {
-				return {
+			const cueEntitySpan = content.slice(
+				Math.min(cueStart + cue.length, entityMatch.start),
+				Math.max(cueStart + cue.length, entityMatch.end),
+			);
+			if (/\b(?:not|never|avoid|cannot|can't|do not|don't)\b/iu.test(`${preceding} ${cueEntitySpan}`)) {
+				decisions.push({
 					status: "rejected",
 					rule: "same_sentence_negated_recommendation_cue",
 					confidence: 0.95,
@@ -955,10 +964,11 @@ function recommendationFor(content: string, classification: EntityClassification
 					cueEnd: cueStart + cue.length,
 					entityMatchStart: entityMatch.start,
 					entityMatchEnd: entityMatch.end,
-				};
+				});
+				continue;
 			}
 			if (/\b(?:might|may|could|possibly|perhaps|consider)\b/iu.test(preceding)) {
-				return {
+				decisions.push({
 					status: "ambiguous",
 					rule: "same_sentence_uncertain_recommendation_cue",
 					confidence: 0.6,
@@ -968,9 +978,10 @@ function recommendationFor(content: string, classification: EntityClassification
 					cueEnd: cueStart + cue.length,
 					entityMatchStart: entityMatch.start,
 					entityMatchEnd: entityMatch.end,
-				};
+				});
+				continue;
 			}
-			return {
+			decisions.push({
 				status: "accepted",
 				rule: "same_sentence_positive_recommendation_cue",
 				confidence: 0.94,
@@ -980,9 +991,23 @@ function recommendationFor(content: string, classification: EntityClassification
 				cueEnd: cueStart + cue.length,
 				entityMatchStart: entityMatch.start,
 				entityMatchEnd: entityMatch.end,
-			};
+			});
 		}
 	}
+	const accepted = decisions.filter((item) => item.status === "accepted");
+	const rejected = decisions.filter((item) => item.status === "rejected");
+	if (accepted.length > 0 && rejected.length > 0) {
+		return {
+			status: "ambiguous",
+			rule: "conflicting_recommendation_occurrences",
+			confidence: 0.5,
+			reasonCodes: ["conflicting_positive_and_negated_occurrences", "human_review_required"],
+		};
+	}
+	if (accepted[0]) return accepted[0];
+	const ambiguous = decisions.find((item) => item.status === "ambiguous");
+	if (ambiguous) return ambiguous;
+	if (rejected[0]) return rejected[0];
 	if (
 		classification.rejectedMatches.length > 0 &&
 		/\b(?:recommend(?:ed|s|ing)?|top choice|best option)\b/iu.test(content)
@@ -1019,19 +1044,16 @@ function explicitProminenceRank(content: string, matchStart: number): number | n
 function prominenceRanks(content: string, classifications: EntityClassification[]): Map<string, number> {
 	const ranks = new Map<string, number>();
 	const proseMatches = classifications
-		.map((classification) => ({
-			classification,
-			match: classification.acceptedMatches.find((match) => match.source !== "domain"),
-		}))
-		.filter(
-			(
-				entry,
-			): entry is { classification: EntityClassification; match: EntityClassification["acceptedMatches"][number] } =>
-				Boolean(entry.match),
+		.flatMap((classification) =>
+			classification.acceptedMatches
+				.filter((match) => match.source !== "domain")
+				.map((match) => ({ classification, match })),
 		)
 		.sort((left, right) => left.match.start - right.match.start);
 	for (const [index, entry] of proseMatches.entries()) {
-		ranks.set(entry.classification.identity.id, explicitProminenceRank(content, entry.match.start) ?? index + 1);
+		const rank = explicitProminenceRank(content, entry.match.start) ?? index + 1;
+		const previous = ranks.get(entry.classification.identity.id);
+		if (previous === undefined || rank < previous) ranks.set(entry.classification.identity.id, rank);
 	}
 	return ranks;
 }
@@ -1670,9 +1692,11 @@ export function createReplayAuditBundle(
 				);
 			}
 			if (fixtureCitation?.supports) {
-				const supportedEntities = entityRows.filter(
-					(entity) => entity.entityRole === fixtureCitation.supports?.entityRole,
-				);
+				const supportedEntities = entityRows.filter((entity) => {
+					if (entity.entityRole !== fixtureCitation.supports?.entityRole) return false;
+					return fixtureCitation.supports.claim !== "recommendation" || entity.recommended;
+				});
+				const supportIsUnique = supportedEntities.length === 1;
 				for (const supportedEntity of supportedEntities) {
 					fixtureLinks.push(
 						createCitationClaimLink({
@@ -1680,9 +1704,11 @@ export function createReplayAuditBundle(
 							citation,
 							entity: supportedEntity,
 							claim: fixtureCitation.supports.claim,
-							status: "accepted",
-							reasonCodes: ["structured_fixture_citation_support", "explicit_entity_claim_relationship"],
-							confidence: 0.99,
+							status: supportIsUnique ? "accepted" : "ambiguous",
+							reasonCodes: supportIsUnique
+								? ["structured_fixture_citation_support", "explicit_entity_claim_relationship"]
+								: ["structured_fixture_support_entity_not_unique", "human_review_required"],
+							confidence: supportIsUnique ? 0.99 : 0.5,
 							content: fixture.payload.responseText,
 							createdAt: replayedAt,
 						}),

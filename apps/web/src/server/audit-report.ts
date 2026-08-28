@@ -17,9 +17,10 @@ import {
 } from "@workspace/lib/audit-report";
 import { db } from "@workspace/lib/db/db";
 import {
+	assertCompleteComparisonSet,
 	findFrozenAuditReportForBaseline,
 	findLatestFrozenAuditReport,
-	persistAuditRetestComparisons,
+	persistCompleteRetest,
 	persistFrozenAuditReport,
 	readAuditRetestComparisons,
 } from "@workspace/lib/db/audit-report-store";
@@ -397,16 +398,22 @@ export const runDeterministicRetestFn = createServerFn({ method: "POST" })
 		const frozen = await findLatestFrozenAuditReport(data.brandId);
 		if (!frozen) throw new Error("Freeze the fixture baseline before running a retest");
 		const existing = await readAuditRetestComparisons(frozen.id, data.brandId);
-		if (existing.length > 0) return buildCustomerAuditReportView(frozen);
+		const expectedIntentFamilyIds = frozen.decisionSnapshot.map((decision) => decision.intentFamilyId);
+		if (existing.length > 0) {
+			assertCompleteComparisonSet(existing, expectedIntentFamilyIds);
+			return buildCustomerAuditReportView(frozen);
+		}
 		const baseline = await loadPersistedReplayAuditBundle(frozen.baselineAuditRunId, data.brandId);
 		if (!baseline) throw new Error("Frozen baseline evidence is unavailable");
 		const identity = await brandInputs(data.brandId);
 		const retestedAt = new Date();
 		const retestCandidate = createDeterministicRetestBundle({ frozenReport: frozen, ...identity, retestedAt });
-		await persistReplayAuditBundle(retestCandidate);
-		const retest = await loadPersistedReplayAuditBundle(retestCandidate.auditRun.id, data.brandId);
-		if (!retest) throw new Error("Fixture retest evidence was not persisted");
-		const comparisons = compareFrozenBaselineToRetest({ frozenReport: frozen, baseline, retest, createdAt: retestedAt });
-		await persistAuditRetestComparisons(comparisons);
+		const comparisons = compareFrozenBaselineToRetest({
+			frozenReport: frozen,
+			baseline,
+			retest: retestCandidate,
+			createdAt: retestedAt,
+		});
+		await persistCompleteRetest({ retest: retestCandidate, comparisons, expectedIntentFamilyIds });
 		return buildCustomerAuditReportView(frozen);
 	});

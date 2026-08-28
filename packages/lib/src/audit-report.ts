@@ -1,25 +1,24 @@
 import type { DiagnosisFindingRecord, LikelyFailureStage, RemediationRecord } from "./diagnosis";
 import { ENTITY_CLASSIFIER_ID, ENTITY_CLASSIFIER_VERSION } from "./evidence";
 import {
+	type CitationClaimEvidenceLinkRecord,
 	canonicalJson,
 	createReplayAuditBundle,
 	createReplayFixtures,
 	deterministicUuid,
+	type EntityIdentityEvidenceRecord,
 	EVIDENCE_CLASSIFIER_ID,
 	EVIDENCE_CLASSIFIER_VERSION,
 	REPLAY_BENCHMARK_VERSION,
 	REPLAY_EXTRACTOR_ID,
 	REPLAY_EXTRACTOR_VERSION,
 	REPLAY_FIXTURE_SCHEMA_VERSION,
-	replayFixtureSchema,
-	sha256,
-	type CitationClaimEvidenceLinkRecord,
-	type EntityIdentityEvidenceRecord,
 	type ReplayAuditBundle,
-	type ReplayAuditInput,
 	type ReplayBrandInput,
 	type ReplayCompetitorInput,
 	type ReplayFixture,
+	replayFixtureSchema,
+	sha256,
 } from "./replay-audit";
 
 export const AUDIT_REPORT_SCHEMA_VERSION = 1 as const;
@@ -180,6 +179,58 @@ function sortedById<T extends { id: string }>(records: T[]): T[] {
 	return [...records].sort((left, right) => left.id.localeCompare(right.id));
 }
 
+function canonicalBusinessIdentity(input: { brand: ReplayBrandInput; competitors: ReplayCompetitorInput[] }): string {
+	return canonicalJson({
+		brand: input.brand,
+		competitors: sortedById(input.competitors),
+	});
+}
+
+function normalizedDomain(value: string): string {
+	const url = new URL(value.includes("://") ? value : `https://${value}`);
+	return url.hostname
+		.toLowerCase()
+		.replace(/^www\./, "")
+		.replace(/\.$/, "");
+}
+
+function assertBaselineIdentityBinding(
+	baseline: ReplayAuditBundle,
+	brand: ReplayBrandInput,
+	competitors: ReplayCompetitorInput[],
+): void {
+	const expected = [
+		{
+			id: `brand:${brand.id}`,
+			name: brand.name,
+			aliases: brand.aliases ?? [],
+			domains: [brand.website, ...(brand.additionalDomains ?? [])].map(normalizedDomain).sort(),
+		},
+		...competitors.map((competitor) => ({
+			id: `competitor:${competitor.id}`,
+			name: competitor.name,
+			aliases: competitor.aliases ?? [],
+			domains: (competitor.domains ?? []).map(normalizedDomain).sort(),
+		})),
+	];
+	for (const identity of expected) {
+		const snapshots = baseline.entityEvidence
+			.filter((entity) => entity.entityId === identity.id)
+			.map((entity) => entity.identitySnapshot);
+		if (
+			snapshots.length === 0 ||
+			snapshots.some(
+				(snapshot) =>
+					snapshot.name !== identity.name ||
+					canonicalJson([...(snapshot.domains ?? [])].sort()) !== canonicalJson(identity.domains) ||
+					identity.aliases.some((alias) => !(snapshot.aliases ?? []).includes(alias)),
+			)
+		) {
+			throw new Error(`Baseline evidence identity does not match ${identity.id}`);
+		}
+	}
+}
+
 function reportChecksumPayload(record: Omit<FrozenAuditReportRecord, "snapshotChecksum">): unknown {
 	return record;
 }
@@ -213,6 +264,7 @@ export function createFrozenAuditReport(input: {
 	if (baseline.intentFamilies.some((intent) => intent.brandId !== brand.id)) {
 		throw new Error("Cross-tenant intent evidence cannot be frozen into this report");
 	}
+	assertBaselineIdentityBinding(baseline, brand, competitors);
 	if (Number.isNaN(input.frozenAt.getTime())) throw new Error("A valid report freeze timestamp is required");
 
 	const promptsByIntent = new Map<string, string[]>();
@@ -433,6 +485,12 @@ export function createDeterministicRetestBundle(input: {
 		throw new Error("Frozen report checksum verification failed");
 	if (input.frozenReport.brandId !== input.brand.id)
 		throw new Error("Retest brand does not match the frozen report tenant");
+	if (
+		canonicalBusinessIdentity({ brand: input.brand, competitors: input.competitors }) !==
+		canonicalBusinessIdentity(input.frozenReport.businessIdentitySnapshot)
+	) {
+		throw new Error("Retest business identity does not match the frozen identity snapshot");
+	}
 	const correlationId = `fixture-retest:${input.frozenReport.id}:${RETEST_FIXTURE_VERSION}`;
 	const retest = createReplayAuditBundle(
 		{
@@ -480,6 +538,12 @@ export function summarizeIntentEvidence(bundle: ReplayAuditBundle, intentFamilyI
 	const targets = entities.filter((entity) => entity.entityRole === "brand");
 	const competitors = entities.filter((entity) => entity.entityRole === "competitor");
 	const acceptedTargetLinks = linksForTarget(bundle, targets);
+	const recommendedTargetEvidenceIds = new Set(
+		targets.filter((target) => target.recommended).map((target) => target.id),
+	);
+	const acceptedTargetRecommendationLinks = acceptedTargetLinks.filter(
+		({ link }) => link.claim === "recommendation" && recommendedTargetEvidenceIds.has(link.entityEvidenceId),
+	);
 	const targetRanks = targets.map((entity) => entity.prominenceRank).filter((rank): rank is number => rank !== null);
 	const competitorRanks = competitors
 		.map((entity) => entity.prominenceRank)
@@ -533,9 +597,9 @@ export function summarizeIntentEvidence(bundle: ReplayAuditBundle, intentFamilyI
 			competitorBestProminenceRank !== null &&
 			(targetBestProminenceRank === null || competitorBestProminenceRank < targetBestProminenceRank),
 		targetAcceptedCitationLinks: acceptedTargetLinks.length,
-		targetRecommendationCitationLinks: acceptedTargetLinks.filter(({ link }) => link.claim === "recommendation").length,
-		targetIndependentRecommendationCitationLinks: acceptedTargetLinks.filter(
-			({ link, citationType }) => link.claim === "recommendation" && citationType === "independent",
+		targetRecommendationCitationLinks: acceptedTargetRecommendationLinks.length,
+		targetIndependentRecommendationCitationLinks: acceptedTargetRecommendationLinks.filter(
+			({ citationType }) => citationType === "independent",
 		).length,
 		targetAcceptedMentionEvidenceCount: targets.reduce(
 			(count, target) =>

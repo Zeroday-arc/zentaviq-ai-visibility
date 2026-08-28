@@ -96,3 +96,8 @@ docker-compose.whitelabel.yml
 .release-notes.md
 
 .claude/skills/add-changeset/
+# Local environment secrets
+.env
+.env.*
+!.env.example
+!.env.local.example

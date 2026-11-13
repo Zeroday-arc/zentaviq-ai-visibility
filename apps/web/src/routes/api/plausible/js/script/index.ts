@@ -15,7 +15,7 @@ const UPSTREAM_HEADERS_TO_FORWARD = [
 export const Route = createFileRoute("/api/plausible/js/script/")({
   server: {
     handlers: {
-			GET: async ({ request }) => {
+			GET: async ({ request }: { request: Request }) => {
 				const upstreamHeaders: Record<string, string> = {};
 
 				// Forward the browser's User-Agent for transparent proxying

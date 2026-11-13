@@ -8,7 +8,7 @@ jobs:
   diagnose:
     runs-on: ubuntu-latest
     permissions:
-      contents: read
+      contents: write
     steps:
       - uses: actions/checkout@v4
       - uses: pnpm/action-setup@v4
@@ -29,3 +29,12 @@ jobs:
         run: pnpm --filter @workspace/web check-types
       - name: Build with matched Router
         run: pnpm run build
+      - name: Commit validated TanStack dependency versions and lockfile
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add apps/web/package.json pnpm-lock.yaml
+          if ! git diff --cached --quiet; then
+            git commit -m 'fix(web): persist validated TanStack versions and lockfile'
+            git push origin HEAD:test/vercel-build-repair-20261114
+          fi

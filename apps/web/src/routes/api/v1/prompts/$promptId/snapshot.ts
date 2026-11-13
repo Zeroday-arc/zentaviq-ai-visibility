@@ -4,7 +4,7 @@
  *
  * Protected by API key authentication.
  */
-import { createServerFileRoute } from "@tanstack/react-start/server";
+import { createFileRoute } from "@tanstack/react-router";
 import { db } from "@workspace/lib/db/db";
 import { brands, competitors, prompts } from "@workspace/lib/db/schema";
 import { eq } from "drizzle-orm";
@@ -24,7 +24,9 @@ function isValidDate(dateStr: string): boolean {
 	return !Number.isNaN(d.getTime());
 }
 
-export const ServerRoute = createServerFileRoute("/api/v1/prompts/$promptId/snapshot").methods({
+export const Route = createFileRoute("/api/v1/prompts/$promptId/snapshot")({
+  server: {
+    handlers: {
 			GET: createApiHandler({
 				params: z.object({ promptId: z.guid("Invalid prompt ID format") }),
 				handle: async ({ params, request }) => {
@@ -152,4 +154,6 @@ export const ServerRoute = createServerFileRoute("/api/v1/prompts/$promptId/snap
 					};
 				},
 			}),
+    },
+  },
 });

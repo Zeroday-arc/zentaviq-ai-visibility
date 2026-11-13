@@ -1,6 +1,6 @@
 import { readFileSync } from "node:fs";
 import { extname } from "node:path";
-import { createServerFileRoute } from "@tanstack/react-start/server";
+import { createFileRoute } from "@tanstack/react-router";
 import ImageResponse from "@takumi-rs/image-response/wasm";
 import takumiWasm from "virtual:takumi-wasm";
 import titanOne400Data from "virtual:font/titan-one-400";
@@ -68,7 +68,9 @@ async function fetchIconAsDataUri(
 	}
 }
 
-export const ServerRoute = createServerFileRoute("/api/og/").methods({
+export const Route = createFileRoute("/api/og/")({
+  server: {
+    handlers: {
 			GET: async ({ request }) => {
 				const url = new URL(request.url);
 				const forceDefault =
@@ -140,4 +142,6 @@ export const ServerRoute = createServerFileRoute("/api/og/").methods({
 					},
 				});
 			},
+    },
+  },
 });

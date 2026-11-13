@@ -24,7 +24,7 @@ jobs:
         continue-on-error: true
         run: pnpm --filter @workspace/web check-types
       - name: Test TanStack Router matching Start
-        run: pnpm --filter @workspace/web add '@tanstack/react-router@1.169.5'
+        run: pnpm --filter @workspace/web add '@tanstack/react-router@latest' '@tanstack/react-start@latest'
       - name: Check types with matched Router
         run: pnpm --filter @workspace/web check-types
       - name: Build with matched Router

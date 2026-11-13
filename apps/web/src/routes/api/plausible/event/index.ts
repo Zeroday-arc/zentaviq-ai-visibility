@@ -1,4 +1,4 @@
-import { createServerFileRoute } from "@tanstack/react-start/server";
+import { createFileRoute } from "@tanstack/react-router";
 
 const PLAUSIBLE_EVENT_URL = "https://plausible.io/api/event";
 
@@ -33,7 +33,9 @@ function buildForwardedHeaders(request: Request): Record<string, string> {
 	return headers;
 }
 
-export const ServerRoute = createServerFileRoute("/api/plausible/event/").methods({
+export const Route = createFileRoute("/api/plausible/event/")({
+  server: {
+    handlers: {
 			POST: async ({ request }) => {
 				const body = await request.text();
 
@@ -50,4 +52,6 @@ export const ServerRoute = createServerFileRoute("/api/plausible/event/").method
 					},
 				});
 			},
+    },
+  },
 });

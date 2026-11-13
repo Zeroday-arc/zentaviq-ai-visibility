@@ -4,9 +4,11 @@
  * The client calls authClient.signOut() first to clear the better-auth session,
  * then redirects here so we can also clear the Auth0 session.
  */
-import { createServerFileRoute } from "@tanstack/react-start/server";
+import { createFileRoute } from "@tanstack/react-router";
 
-export const ServerRoute = createServerFileRoute("/auth/logout").methods({
+export const Route = createFileRoute("/auth/logout")({
+  server: {
+    handlers: {
 			GET: async ({ request }: { request: Request }) => {
 				const baseUrl = new URL("/", request.url).toString();
 
@@ -25,4 +27,6 @@ export const ServerRoute = createServerFileRoute("/auth/logout").methods({
 					headers: { Location: baseUrl },
 				});
 			},
+    },
+  },
 });

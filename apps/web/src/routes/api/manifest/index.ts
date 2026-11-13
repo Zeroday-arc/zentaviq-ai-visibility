@@ -8,7 +8,7 @@
  * Branding values (name, theme color, etc.) are read from server config
  * so they stay in sync with the rest of the app.
  */
-import { createFileRoute } from "@tanstack/react-router";
+import { createServerFileRoute } from "@tanstack/react-start/server";
 import { getDeployment } from "@/lib/config/server";
 import {
 	DEFAULT_APP_ICON,
@@ -91,9 +91,7 @@ function buildManifest(): object {
 	};
 }
 
-export const Route = createFileRoute("/api/manifest/")({
-	server: {
-		handlers: {
+export const ServerRoute = createServerFileRoute("/api/manifest/").methods({
 			GET: () => {
 				const manifest = buildManifest();
 				return new Response(JSON.stringify(manifest, null, 2), {
@@ -103,7 +101,4 @@ export const Route = createFileRoute("/api/manifest/")({
 					},
 				});
 			},
-		},
-	},
 });
-

@@ -7,7 +7,7 @@
  *
  * Protected by API key authentication.
  */
-import { createFileRoute } from "@tanstack/react-router";
+import { createServerFileRoute } from "@tanstack/react-start/server";
 import { db } from "@workspace/lib/db/db";
 import { competitors } from "@workspace/lib/db/schema";
 import { eq } from "drizzle-orm";
@@ -27,9 +27,7 @@ const updateCompetitorBody = z
 	})
 	.refine((body) => Object.keys(body).length > 0, "At least one of name, domains, or aliases must be provided");
 
-export const Route = createFileRoute("/api/v1/competitors/$competitorId")({
-	server: {
-		handlers: {
+export const ServerRoute = createServerFileRoute("/api/v1/competitors/$competitorId").methods({
 			GET: createApiHandler({
 				params: competitorParams,
 				handle: async ({ params }) => {
@@ -87,6 +85,4 @@ export const Route = createFileRoute("/api/v1/competitors/$competitorId")({
 					return deleted;
 				},
 			}),
-		},
-	},
 });

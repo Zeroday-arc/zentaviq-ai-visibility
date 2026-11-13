@@ -2,7 +2,7 @@
  * /api/v1/prompts - External API endpoint for prompt management
  * Protected by API key authentication.
  */
-import { createFileRoute } from "@tanstack/react-router";
+import { createServerFileRoute } from "@tanstack/react-start/server";
 import { db } from "@workspace/lib/db/db";
 import { prompts, brands } from "@workspace/lib/db/schema";
 import { eq, count, desc } from "drizzle-orm";
@@ -17,9 +17,7 @@ const createPromptBody = z.object({
 	tags: z.array(z.string()).optional(),
 });
 
-export const Route = createFileRoute("/api/v1/prompts/")({
-	server: {
-		handlers: {
+export const ServerRoute = createServerFileRoute("/api/v1/prompts/").methods({
 			GET: createApiHandler({
 				handle: async ({ request }) => {
 					const { searchParams } = new URL(request.url);
@@ -83,6 +81,4 @@ export const Route = createFileRoute("/api/v1/prompts/")({
 					return newPrompt;
 				},
 			}),
-		},
-	},
 });

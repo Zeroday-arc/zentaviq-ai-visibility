@@ -6,7 +6,7 @@
  *
  * Protected by API key authentication.
  */
-import { createFileRoute } from "@tanstack/react-router";
+import { createServerFileRoute } from "@tanstack/react-start/server";
 import { db } from "@workspace/lib/db/db";
 import { brands } from "@workspace/lib/db/schema";
 import { eq } from "drizzle-orm";
@@ -20,9 +20,7 @@ import {
 } from "@/server/onboarding-core";
 import { ApiError, createApiHandler } from "@/lib/api/handler";
 
-export const Route = createFileRoute("/api/v1/brands/$brandId")({
-	server: {
-		handlers: {
+export const ServerRoute = createServerFileRoute("/api/v1/brands/$brandId").methods({
 			// No params schema: brand IDs are caller-chosen strings (e.g. "acme"),
 			// not UUIDs like the competitor/prompt/report routes validate.
 			GET: createApiHandler({
@@ -54,6 +52,4 @@ export const Route = createFileRoute("/api/v1/brands/$brandId")({
 					return await updateBrand(internal);
 				},
 			}),
-		},
-	},
 });

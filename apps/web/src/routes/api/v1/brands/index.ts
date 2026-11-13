@@ -6,7 +6,7 @@
  *
  * Protected by API key authentication.
  */
-import { createFileRoute } from "@tanstack/react-router";
+import { createServerFileRoute } from "@tanstack/react-start/server";
 import { db } from "@workspace/lib/db/db";
 import { brands } from "@workspace/lib/db/schema";
 import { count, desc } from "drizzle-orm";
@@ -20,9 +20,7 @@ import {
 } from "@/server/onboarding-core";
 import { ApiError, createApiHandler } from "@/lib/api/handler";
 
-export const Route = createFileRoute("/api/v1/brands/")({
-	server: {
-		handlers: {
+export const ServerRoute = createServerFileRoute("/api/v1/brands/").methods({
 			GET: createApiHandler({
 				handle: async ({ request }) => {
 					const { searchParams } = new URL(request.url);
@@ -64,6 +62,4 @@ export const Route = createFileRoute("/api/v1/brands/")({
 					return await createBrand(internal);
 				},
 			}),
-		},
-	},
 });

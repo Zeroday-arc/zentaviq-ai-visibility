@@ -7,7 +7,7 @@
  *
  * Protected by API key authentication.
  */
-import { createFileRoute } from "@tanstack/react-router";
+import { createServerFileRoute } from "@tanstack/react-start/server";
 import { db } from "@workspace/lib/db/db";
 import { brands, citations, promptRuns, prompts } from "@workspace/lib/db/schema";
 import { eq } from "drizzle-orm";
@@ -28,9 +28,7 @@ const updatePromptBody = z
 	})
 	.refine((body) => Object.keys(body).length > 0, "At least one of value, enabled, or tags must be provided");
 
-export const Route = createFileRoute("/api/v1/prompts/$promptId")({
-	server: {
-		handlers: {
+export const ServerRoute = createServerFileRoute("/api/v1/prompts/$promptId").methods({
 			GET: createApiHandler({
 				params: promptParams,
 				handle: async ({ params }) => {
@@ -141,6 +139,4 @@ export const Route = createFileRoute("/api/v1/prompts/$promptId")({
 					return { ...deleted, deletedRunsCount: result.deletedRuns.length };
 				},
 			}),
-		},
-	},
 });

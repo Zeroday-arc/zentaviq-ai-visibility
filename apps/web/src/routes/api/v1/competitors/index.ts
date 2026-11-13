@@ -6,7 +6,7 @@
  *
  * Protected by API key authentication.
  */
-import { createFileRoute } from "@tanstack/react-router";
+import { createServerFileRoute } from "@tanstack/react-start/server";
 import { db } from "@workspace/lib/db/db";
 import { competitors, brands } from "@workspace/lib/db/schema";
 import { eq, count, desc } from "drizzle-orm";
@@ -22,9 +22,7 @@ const createCompetitorBody = z.object({
 	aliases: z.array(z.string()).optional(),
 });
 
-export const Route = createFileRoute("/api/v1/competitors/")({
-	server: {
-		handlers: {
+export const ServerRoute = createServerFileRoute("/api/v1/competitors/").methods({
 			GET: createApiHandler({
 				handle: async ({ request }) => {
 					const { searchParams } = new URL(request.url);
@@ -98,6 +96,4 @@ export const Route = createFileRoute("/api/v1/competitors/")({
 					return inserted;
 				},
 			}),
-		},
-	},
 });

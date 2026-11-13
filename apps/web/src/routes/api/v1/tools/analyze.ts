@@ -7,7 +7,7 @@
  *
  * Protected by API key authentication.
  */
-import { createFileRoute } from "@tanstack/react-router";
+import { createServerFileRoute } from "@tanstack/react-start/server";
 import { z } from "zod";
 import { analyzeBrand, cleanOnboardingDomain } from "@workspace/lib/onboarding";
 import { createApiHandler } from "@/lib/api/handler";
@@ -25,9 +25,7 @@ const analyzeBody = z.object({
 	maxPrompts: z.int("maxPrompts must be a non-negative integer").min(0, "maxPrompts must be a non-negative integer").optional(),
 });
 
-export const Route = createFileRoute("/api/v1/tools/analyze")({
-	server: {
-		handlers: {
+export const ServerRoute = createServerFileRoute("/api/v1/tools/analyze").methods({
 			POST: createApiHandler({
 				body: analyzeBody,
 				handle: async ({ body }) => {
@@ -39,6 +37,4 @@ export const Route = createFileRoute("/api/v1/tools/analyze")({
 					});
 				},
 			}),
-		},
-	},
 });

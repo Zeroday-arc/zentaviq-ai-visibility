@@ -6,7 +6,7 @@
  *      (mentions with top-K competitors).
  *      Consumers are responsible for computing SoV and other derived metrics.
  */
-import { createFileRoute } from "@tanstack/react-router";
+import { createServerFileRoute } from "@tanstack/react-start/server";
 import { db } from "@workspace/lib/db/db";
 import { reports } from "@workspace/lib/db/schema";
 import { eq } from "drizzle-orm";
@@ -14,9 +14,7 @@ import { z } from "zod";
 import { computeReportUnstableStats } from "@workspace/lib/report-metrics";
 import { ApiError, createApiHandler } from "@/lib/api/handler";
 
-export const Route = createFileRoute("/api/v1/reports/$reportId")({
-	server: {
-		handlers: {
+export const ServerRoute = createServerFileRoute("/api/v1/reports/$reportId").methods({
 			GET: createApiHandler({
 				params: z.object({ reportId: z.guid("Invalid report ID format") }),
 				handle: async ({ params, request }) => {
@@ -110,6 +108,4 @@ export const Route = createFileRoute("/api/v1/reports/$reportId")({
 					};
 				},
 			}),
-		},
-	},
 });

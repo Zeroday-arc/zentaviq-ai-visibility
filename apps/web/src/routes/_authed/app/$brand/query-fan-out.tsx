@@ -63,7 +63,7 @@ function QueryFanoutPage() {
 	const navigate = Route.useNavigate();
 	const setTab = (next: FanoutTab) =>
 		navigate({
-			search: (prev) => ({ ...prev, tab: next === "fanout" ? undefined : next }),
+			search: (prev: { tab?: FanoutTab }) => ({ ...prev, tab: next === "fanout" ? undefined : next }),
 			replace: true,
 			resetScroll: false,
 		});

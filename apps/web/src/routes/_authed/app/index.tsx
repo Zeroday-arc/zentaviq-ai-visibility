@@ -75,7 +75,7 @@ function BrandSwitcherPage() {
 		<FullPageCard title="Brand Switcher" subtitle="Select a brand to get started">
 			<div className="flex flex-col space-y-3 min-w-[250px] sm:min-w-[300px]">
 				{organizations.length > 0 ? (
-					organizations.map((org) => (
+					organizations.map((org: { id: string; name: string; targetMarket?: string | null; author?: string | null }) => (
 						<Button key={org.id} asChild variant="secondary" className="h-auto py-3 justify-start">
 							<Link to="/app/$brand" params={{ brand: org.id }} className="flex flex-col items-start text-left w-full gap-1">
 								<span className="font-semibold text-base">{org.name}</span>

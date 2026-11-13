@@ -91,7 +91,7 @@ function PromptHistoryPage() {
 	const setActiveTab = useCallback(
 		(tab: TabKey) =>
 			navigate({
-				search: (prev) => ({ ...prev, tab: tab === "mentions" ? undefined : tab }),
+				search: (prev: { tab?: TabKey }) => ({ ...prev, tab: tab === "mentions" ? undefined : tab }),
 				replace: true,
 				resetScroll: false,
 			}),

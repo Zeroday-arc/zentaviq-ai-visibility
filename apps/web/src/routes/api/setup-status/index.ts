@@ -4,10 +4,12 @@
  * Returns whether the DB is reachable and migrations have run.
  * Used by the error page to distinguish "still setting up" from real errors.
  */
-import { createServerFileRoute } from "@tanstack/react-start/server";
+import { createFileRoute } from "@tanstack/react-router";
 import { db } from "@workspace/lib/db/db";
 
-export const ServerRoute = createServerFileRoute("/api/setup-status/").methods({
+export const Route = createFileRoute("/api/setup-status/")({
+  server: {
+    handlers: {
 		GET: async () => {
 				try {
 					await db.query.brands.findFirst();
@@ -16,4 +18,6 @@ export const ServerRoute = createServerFileRoute("/api/setup-status/").methods({
 					return Response.json({ ready: false });
 				}
 			},
+    },
+  },
 });

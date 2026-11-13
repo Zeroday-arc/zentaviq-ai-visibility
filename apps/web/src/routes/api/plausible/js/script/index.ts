@@ -1,4 +1,4 @@
-import { createServerFileRoute } from "@tanstack/react-start/server";
+import { createFileRoute } from "@tanstack/react-router";
 
 const PLAUSIBLE_SCRIPT_URL = "https://plausible.io/js/script.js";
 
@@ -12,7 +12,9 @@ const UPSTREAM_HEADERS_TO_FORWARD = [
 	"last-modified",
 ] as const;
 
-export const ServerRoute = createServerFileRoute("/api/plausible/js/script/").methods({
+export const Route = createFileRoute("/api/plausible/js/script/")({
+  server: {
+    handlers: {
 			GET: async ({ request }) => {
 				const upstreamHeaders: Record<string, string> = {};
 
@@ -67,4 +69,6 @@ export const ServerRoute = createServerFileRoute("/api/plausible/js/script/").me
 					headers: responseHeaders,
 				});
 			},
+    },
+  },
 });

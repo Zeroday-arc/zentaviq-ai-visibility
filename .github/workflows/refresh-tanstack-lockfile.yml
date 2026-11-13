@@ -1,0 +1,41 @@
+name: Regenerate patched TanStack lockfile
+on:
+  push:
+    branches:
+      - fix/tanstack-start-cve-2026-102989
+    paths:
+      - '.github/workflows/refresh-tanstack-lockfile.yml'
+      - 'apps/web/package.json'
+permissions:
+  contents: write
+jobs:
+  refresh:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: true
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 11.10.0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: pnpm
+      - name: Update lockfile using pnpm resolver
+        run: pnpm install --lockfile-only --no-frozen-lockfile
+      - name: Confirm vulnerable package removed
+        run: |
+          if grep -q "@tanstack/react-start@1.168.25" pnpm-lock.yaml; then
+            echo "Vulnerable TanStack Start remains in lockfile" >&2
+            exit 1
+          fi
+      - name: Commit updated lockfile
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add pnpm-lock.yaml
+          if ! git diff --cached --quiet; then
+            git commit -m "security: regenerate lockfile with patched TanStack Start"
+            git push
+          fi

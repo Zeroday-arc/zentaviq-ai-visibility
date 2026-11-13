@@ -5,7 +5,7 @@
  * POST: Create a new report and queue generation.
  * GET: List reports with pagination.
  */
-import { createServerFileRoute } from "@tanstack/react-start/server";
+import { createFileRoute } from "@tanstack/react-router";
 import { db } from "@workspace/lib/db/db";
 import { reports, type NewReport } from "@workspace/lib/db/schema";
 import { desc, count, eq } from "drizzle-orm";
@@ -30,7 +30,9 @@ const createReportBody = z.object({
 	manualPrompts: z.array(z.string()).optional(),
 });
 
-export const ServerRoute = createServerFileRoute("/api/v1/reports/").methods({
+export const Route = createFileRoute("/api/v1/reports/")({
+  server: {
+    handlers: {
 			POST: createApiHandler({
 				body: createReportBody,
 				status: 201,
@@ -106,4 +108,6 @@ export const ServerRoute = createServerFileRoute("/api/v1/reports/").methods({
 					};
 				},
 			}),
+    },
+  },
 });

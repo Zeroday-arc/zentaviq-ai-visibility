@@ -71,7 +71,7 @@ async function fetchIconAsDataUri(
 export const Route = createFileRoute("/api/og/")({
   server: {
     handlers: {
-			GET: async ({ request }) => {
+			GET: async ({ request }: { request: Request }) => {
 				const url = new URL(request.url);
 				const forceDefault =
 					url.searchParams.get("defaultBranding") === "true";

@@ -36,7 +36,7 @@ function buildForwardedHeaders(request: Request): Record<string, string> {
 export const Route = createFileRoute("/api/plausible/event/")({
   server: {
     handlers: {
-			POST: async ({ request }) => {
+			POST: async ({ request }: { request: Request }) => {
 				const body = await request.text();
 
 				const upstreamResponse = await fetch(PLAUSIBLE_EVENT_URL, {
